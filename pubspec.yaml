@@ -1,24 +1,28 @@
-
 name: netoscope
-description: A modular Flutter network logging and inspection toolkit for developers.
-version: 0.1.0
-repository: https://github.com/sonuraj909/netoscope
+description: >-
+  Debug-time network inspector for Flutter: Dio, package:http, GraphQL, SSE,
+  WebSocket, gRPC and webhooks, with redaction, payload decoders and an
+  optional in-app UI.
+version: 0.2.0
 
 environment:
-  sdk: ">=3.2.0 <4.0.0"
-  flutter: ">=3.16.0"
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
 
 dependencies:
+  dio: ^5.4.0
   flutter:
     sdk: flutter
+  http: ^1.5.0
 
 dev_dependencies:
+  flutter_lints: ^5.0.0
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
 
 topics:
   - debugging
-  - networking
+  - network
   - logging
-  - developer-tools
+  - http
+  - dio

@@ -1,0 +1,32 @@
+name: netoscope_native
+description: >-
+  Native network capture for Netoscope: records HTTP calls made by Android
+  (OkHttp) and iOS (URLSession) code into the same redacted history.
+version: 0.1.0
+# Path dependency on netoscope until it is published; switch to a hosted
+# version constraint before publishing this package.
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  netoscope:
+    path: ../../
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: dev.netoscope.netoscope_native
+        pluginClass: NetoscopeNativePlugin
+      ios:
+        pluginClass: NetoscopeNativePlugin
