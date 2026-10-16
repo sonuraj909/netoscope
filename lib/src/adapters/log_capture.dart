@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../config/network_logger_config.dart';
 import '../core/contracts/payload_decoder.dart';
 import '../core/entities/network_event_kind.dart';
@@ -12,6 +14,9 @@ import '../protocols/webhook/webhook_config.dart';
 import '../protocols/webhook/webhook_inspector.dart';
 import '../security/body_capture.dart';
 import '../security/log_redactor.dart';
+
+/// The zone key holding tags set by `Netoscope.tagged`.
+final Object netoscopeTagsZoneKey = Object();
 
 /// Protocol information derived from an HTTP exchange.
 typedef HttpInspection = ({
@@ -63,6 +68,57 @@ class LogCapture {
 
   /// Whether new activity is recorded at all right now.
   bool get isRecording => config.isEnabled && recording;
+
+  final Map<String, int> _claims = {};
+  final Set<String> _globalTags = {};
+
+  /// Tags applied to every call until removed.
+  Set<String> get globalTags => Set.unmodifiable(_globalTags);
+
+  /// Adds a global tag.
+  void addTag(String tag) => _globalTags.add(tag);
+
+  /// Removes a global tag.
+  void removeTag(String tag) => _globalTags.remove(tag);
+
+  /// Removes all global tags.
+  void clearTags() => _globalTags.clear();
+
+  /// Tags for a call starting now: global tags plus those of enclosing
+  /// `Netoscope.tagged` zones, plus [extra].
+  List<String> currentTags([Iterable<String> extra = const []]) {
+    final zoneTags = Zone.current[netoscopeTagsZoneKey];
+    return {
+      ..._globalTags,
+      if (zoneTags is Iterable<String>) ...zoneTags,
+      ...extra,
+    }.toList();
+  }
+
+  static String _claimKey(String method, Uri url) =>
+      '${method.toUpperCase()} $url';
+
+  /// Marks a call as recorded by a higher-level adapter (Dio, `http`) while
+  /// it is being opened, so the `dart:io` layer does not record it again.
+  void claim(String method, Uri url) {
+    final key = _claimKey(method, url);
+    _claims[key] = (_claims[key] ?? 0) + 1;
+  }
+
+  /// Ends a [claim].
+  void release(String method, Uri url) {
+    final key = _claimKey(method, url);
+    final count = (_claims[key] ?? 0) - 1;
+    if (count <= 0) {
+      _claims.remove(key);
+    } else {
+      _claims[key] = count;
+    }
+  }
+
+  /// Whether a higher-level adapter is currently recording this call.
+  bool isClaimed(String method, Uri url) =>
+      _claims.containsKey(_claimKey(method, url));
 
   /// Whether a call to [url] should be recorded.
   bool shouldLog(Uri url) => isRecording && !config.isExcluded(url);

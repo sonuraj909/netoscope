@@ -141,13 +141,17 @@ void main() {
   testWidgets('clears history after confirmation', (tester) async {
     await pumpInspector(tester);
 
-    await tester.tap(find.byTooltip('Clear history'));
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear history'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(netoscope.logs, hasLength(3));
 
-    await tester.tap(find.byTooltip('Clear history'));
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear history'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Clear'));
     await tester.pumpAndSettle();
@@ -172,8 +176,10 @@ void main() {
     );
     await pumpInspector(tester);
 
-    await tester.tap(find.byTooltip('Copy all as JSON'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy all as JSON'));
+    await tester.pumpAndSettle();
 
     final json = jsonDecode(copied!) as Map<String, Object?>;
     expect(json['count'], 3);

@@ -1,3 +1,4 @@
+import 'json_helpers.dart';
 import 'payload_format.dart';
 
 /// How a captured payload is represented in [NetworkLogBody.content].
@@ -37,6 +38,18 @@ class NetworkLogBody {
     PayloadFormat? format,
     this.contentType,
   }) : _format = format;
+
+  /// Restores a body from [toJson] output.
+  factory NetworkLogBody.fromJson(Map<String, Object?> json) => NetworkLogBody(
+        kind: readEnum(
+            NetworkBodyKind.values, json['kind'], NetworkBodyKind.text),
+        content: readAs<String>(json['content']) ?? '',
+        isTruncated: json['truncated'] == true,
+        format: json['format'] is String
+            ? PayloadFormat.byId(json['format']! as String)
+            : null,
+        contentType: readAs<String>(json['contentType']),
+      );
 
   /// How [content] is represented.
   final NetworkBodyKind kind;

@@ -82,6 +82,7 @@ class WebhookImporter {
         ),
       ),
       details: [details],
+      tags: _capture.currentTags(),
       metadata: const {'source': 'imported'},
     );
   }

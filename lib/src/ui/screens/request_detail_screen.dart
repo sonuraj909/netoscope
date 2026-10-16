@@ -7,10 +7,12 @@ import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_body.dart';
 import '../../core/entities/network_log_entry.dart';
 import '../../core/entities/protocol_details.dart';
+import '../../core/entities/traffic_insights.dart';
 import '../../core/entities/webhook_details.dart';
 import '../payload/built_in_viewers.dart';
 import '../payload/code_block.dart';
 import '../payload/payload_viewer.dart';
+import '../network_log_filter.dart';
 import '../payload/syntax_highlighter.dart';
 import '../theme/inspector_theme.dart';
 import '../widgets/entry_actions.dart';
@@ -27,7 +29,15 @@ class RequestDetailScreen extends StatelessWidget {
     this.payloadViewers = const [],
     this.onShowConnection,
     this.redactionMask = '***',
+    this.insights,
+    this.onShowCalls,
   });
+
+  /// Duplicate and N+1 findings, to explain this call's part in them.
+  final TrafficInsights? insights;
+
+  /// Opens a filtered call list (used to show a whole duplicate group).
+  final void Function(String title, NetworkLogFilter filter)? onShowCalls;
 
   /// The event shown.
   final NetworkLogEntry entry;
@@ -53,6 +63,15 @@ class RequestDetailScreen extends StatelessWidget {
           entry: entry,
           slowThreshold: slowThreshold,
           mask: redactionMask,
+          groups: [
+            for (final group in insights?.nPlusOne ?? const <RequestGroup>[])
+              if (group.entries.any((e) => e.id == entry.id))
+                ('Possible N+1', group),
+            for (final group in insights?.duplicates ?? const <RequestGroup>[])
+              if (group.entries.any((e) => e.id == entry.id))
+                ('Duplicate requests', group),
+          ],
+          onShowCalls: onShowCalls,
         ),
       ),
       ...switch (entry.kind) {
@@ -166,11 +185,15 @@ class _OverviewTab extends StatelessWidget {
     required this.entry,
     required this.slowThreshold,
     required this.mask,
+    this.groups = const [],
+    this.onShowCalls,
   });
 
   final NetworkLogEntry entry;
   final Duration slowThreshold;
   final String mask;
+  final List<(String, RequestGroup)> groups;
+  final void Function(String title, NetworkLogFilter filter)? onShowCalls;
 
   @override
   Widget build(BuildContext context) {
@@ -179,6 +202,17 @@ class _OverviewTab extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         _Summary(entry: entry, slowThreshold: slowThreshold, mask: mask),
+        for (final (kind, group) in groups)
+          SectionCard(
+            title: 'Redundant traffic',
+            icon: Icons.content_copy_outlined,
+            color: warningColor(Theme.of(context).colorScheme),
+            child: _GroupNotice(
+              kind: kind,
+              group: group,
+              onShowCalls: onShowCalls,
+            ),
+          ),
         if (error != null)
           SectionCard(
             title: 'Error',
@@ -349,6 +383,8 @@ class _Summary extends StatelessWidget {
                   color: warningColor(scheme),
                   filled: true,
                 ),
+              for (final tag in entry.tags)
+                LogBadge(label: '#$tag', color: scheme.primary, filled: true),
             ],
           ),
           const SizedBox(height: 12),
@@ -896,6 +932,74 @@ class _Tag extends StatelessWidget {
           height: 1.3,
           color: scheme.onSurfaceVariant,
         ),
+      ),
+    );
+  }
+}
+
+class _GroupNotice extends StatelessWidget {
+  const _GroupNotice({
+    required this.kind,
+    required this.group,
+    required this.onShowCalls,
+  });
+
+  final String kind;
+  final RequestGroup group;
+  final void Function(String title, NetworkLogFilter filter)? onShowCalls;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final color = warningColor(scheme);
+    final show = onShowCalls;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withAlpha(22),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withAlpha(110)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$kind: ${group.count} calls in ${formatDuration(group.span)}',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            group.pattern,
+            style: codeTextStyle.copyWith(
+              fontSize: 12,
+              height: 1.35,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            kind == 'Possible N+1'
+                ? 'Each item was fetched separately. Consider a batch or '
+                    'list endpoint that returns them together.'
+                : 'The same request was sent repeatedly. Consider caching, '
+                    'deduplicating in-flight requests or debouncing.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          if (show != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => show(
+                  kind,
+                  NetworkLogFilter(ids: {for (final e in group.entries) e.id}),
+                ),
+                child: const Text('Show all'),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -26,3 +26,13 @@ flutter test
 4. Tap **GET /health** and note that it is excluded from the logs.
 5. Search, filter by status or method, copy a call as JSON, export everything,
    and clear the history.
+
+## Native capture test
+
+`integration_test/native_capture_test.dart` runs real native requests
+(OkHttp on Android, `URLSession` on iOS) and checks that they're captured and
+redacted:
+
+```sh
+flutter test integration_test -d <device-id>
+```

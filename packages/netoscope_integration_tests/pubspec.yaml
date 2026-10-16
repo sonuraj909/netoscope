@@ -1,0 +1,28 @@
+name: netoscope_integration_tests
+description: >-
+  Verifies Netoscope with third-party HTTP clients built on Dio or
+  package:http (Retrofit, Chopper, gql_http_link). Not published.
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  chopper: ^8.4.0
+  dio: ^5.4.0
+  flutter:
+    sdk: flutter
+  gql: ^1.0.1
+  gql_exec: ^1.0.0+1
+  gql_http_link: ^1.1.0
+  http: ^1.5.0
+  netoscope:
+    path: ../../
+  retrofit: ^4.10.0
+
+dev_dependencies:
+  build_runner: ^2.15.1
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+  retrofit_generator: ^10.2.12

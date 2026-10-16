@@ -60,6 +60,14 @@ class PayloadFormat {
     unsupported,
   ];
 
+  /// The built-in format with [id], or a custom format named after it.
+  static PayloadFormat byId(String id) {
+    for (final format in builtIn) {
+      if (format.id == id) return format;
+    }
+    return PayloadFormat(id, label: id);
+  }
+
   @override
   bool operator ==(Object other) => other is PayloadFormat && other.id == id;
 

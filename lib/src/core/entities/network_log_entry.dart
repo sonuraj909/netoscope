@@ -1,4 +1,6 @@
+import 'details_codec.dart';
 import 'graphql_details.dart';
+import 'json_helpers.dart';
 import 'network_event_kind.dart';
 import 'network_log_body.dart';
 import 'network_log_error.dart';
@@ -54,12 +56,61 @@ class NetworkLogEntry {
     this.lifecycle,
     this.connectionId,
     List<ProtocolDetails> details = const [],
+    List<String> tags = const [],
     Map<String, String> metadata = const {},
   })  : method = method.toUpperCase(),
         requestHeaders = Map.unmodifiable(requestHeaders),
         responseHeaders = Map.unmodifiable(responseHeaders),
         details = List.unmodifiable(details),
-        metadata = Map.unmodifiable(metadata);
+        metadata = Map.unmodifiable(metadata),
+        tags = List.unmodifiable(tags);
+
+  /// Restores an entry from [toJson] output (for example a persisted
+  /// history). Derived fields (`outcome`, `queryParameters`) are recomputed;
+  /// custom protocol details are dropped.
+  factory NetworkLogEntry.fromJson(Map<String, Object?> json) {
+    Object? body(String key) => json[key];
+    final requestBody = readObject(body('requestBody'));
+    final responseBody = readObject(body('responseBody'));
+    final error = readObject(json['error']);
+    final durationMs = readInt(json['durationMs']);
+    return NetworkLogEntry(
+      id: readAs<String>(json['id']) ?? '',
+      method: readAs<String>(json['method']) ?? 'GET',
+      url: Uri.tryParse(readAs<String>(json['url']) ?? '') ?? Uri(),
+      timestamp: DateTime.tryParse(readAs<String>(json['timestamp']) ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      statusCode: readInt(json['statusCode']),
+      duration: durationMs == null ? null : Duration(milliseconds: durationMs),
+      requestSize: readInt(json['requestSize']),
+      responseSize: readInt(json['responseSize']),
+      requestHeaders: readStringMap(json['requestHeaders']),
+      responseHeaders: readStringMap(json['responseHeaders']),
+      requestBody:
+          requestBody == null ? null : NetworkLogBody.fromJson(requestBody),
+      responseBody:
+          responseBody == null ? null : NetworkLogBody.fromJson(responseBody),
+      error: error == null ? null : NetworkLogError.fromJson(error),
+      protocol: readEnum(
+          NetworkProtocol.values, json['protocol'], NetworkProtocol.http),
+      kind: readEnum(
+          NetworkEventKind.values, json['kind'], NetworkEventKind.exchange),
+      direction: readEnumOrNull(MessageDirection.values, json['direction']),
+      lifecycle: readEnumOrNull(ConnectionLifecycle.values, json['lifecycle']),
+      connectionId: readAs<String>(json['connectionId']),
+      details: [
+        if (json['details'] is List)
+          for (final item in json['details']! as List)
+            if (protocolDetailsFromJson(item) case final ProtocolDetails d) d,
+      ],
+      metadata: readStringMap(json['metadata']),
+      tags: [
+        if (json['tags'] is List)
+          for (final tag in json['tags']! as List)
+            if (tag is String) tag,
+      ],
+    );
+  }
 
   /// A unique identifier for this event.
   final String id;
@@ -123,6 +174,10 @@ class NetworkLogEntry {
 
   /// Free-form, already-redacted metadata from adapters or recorders.
   final Map<String, String> metadata;
+
+  /// Labels attached with `Netoscope.addTag`, `Netoscope.tagged` or a
+  /// per-request tag, such as `login-flow`.
+  final List<String> tags;
 
   /// The query parameters of [url]. Values have already been redacted.
   Map<String, List<String>> get queryParameters => url.queryParametersAll;
@@ -205,6 +260,7 @@ class NetworkLogEntry {
         'error': error?.toJson(),
         'details': [for (final item in details) item.toJson()],
         'metadata': metadata,
+        'tags': tags,
       };
 
   @override

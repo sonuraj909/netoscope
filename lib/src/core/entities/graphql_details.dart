@@ -1,3 +1,4 @@
+import 'json_helpers.dart';
 import 'protocol_details.dart';
 
 /// The kind of a GraphQL operation.
@@ -25,6 +26,17 @@ class GraphQLOperation {
     this.variables,
     this.persistedQueryHash,
   });
+
+  /// Restores an operation from [toJson] output.
+  factory GraphQLOperation.fromJson(Map<String, Object?> json) =>
+      GraphQLOperation(
+        name: readAs<String>(json['name']),
+        type: readEnum(GraphQLOperationType.values, json['type'],
+            GraphQLOperationType.unknown),
+        document: readAs<String>(json['document']),
+        variables: readAs<String>(json['variables']),
+        persistedQueryHash: readAs<String>(json['persistedQueryHash']),
+      );
 
   /// The operation name, if given or found in the document.
   final String? name;
@@ -64,6 +76,18 @@ class GraphQLError {
     this.operationIndex,
   }) : path = List.unmodifiable(path);
 
+  /// Restores an error from [toJson] output.
+  factory GraphQLError.fromJson(Map<String, Object?> json) => GraphQLError(
+        message: readAs<String>(json['message']) ?? '',
+        path: [
+          if (json['path'] is List)
+            for (final segment in json['path']! as List)
+              if (segment is String || segment is int) segment as Object,
+        ],
+        code: readAs<String>(json['code']),
+        operationIndex: readInt(json['operationIndex']),
+      );
+
   /// The error message.
   final String message;
 
@@ -101,6 +125,23 @@ class GraphQLDetails extends ProtocolDetails {
     this.hasData,
   })  : operations = List.unmodifiable(operations),
         errors = List.unmodifiable(errors);
+
+  /// Restores details from [toJson] output.
+  factory GraphQLDetails.fromJson(Map<String, Object?> json) => GraphQLDetails(
+        operations: [
+          if (json['operations'] is List)
+            for (final op in json['operations']! as List)
+              if (readObject(op) case final Map<String, Object?> map)
+                GraphQLOperation.fromJson(map),
+        ],
+        errors: [
+          if (json['errors'] is List)
+            for (final error in json['errors']! as List)
+              if (readObject(error) case final Map<String, Object?> map)
+                GraphQLError.fromJson(map),
+        ],
+        hasData: readAs<bool>(json['hasData']),
+      );
 
   /// The operations sent. More than one for batched requests.
   final List<GraphQLOperation> operations;

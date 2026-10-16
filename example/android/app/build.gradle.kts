@@ -47,4 +47,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Used by the native demo (MainActivity) with NetoscopeInterceptor.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

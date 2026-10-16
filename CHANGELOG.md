@@ -36,6 +36,36 @@ unchanged.
   - A GraphQL tab and connection event views.
   - Custom `PayloadViewer`s.
   - Background formatting and lazy rendering for large bodies.
+- **Deep inspection:**
+  - **Search syntax:** `method:`, `status:` (ranges, classes, outcomes),
+    `host:`, `path:`, `duration:`, `size:`, `protocol:`, `tag:`, `is:`, `op:`,
+    `header:`, `body:` and more, with negation and alternatives, plus an
+    in-app cheat sheet.
+  - **Call tagging:** `tagged()` (zone-scoped, across all clients),
+    `addTag`/`removeTag`/`clearTags`, and per-request Dio tags.
+    `NetworkLogEntry.tags`.
+  - **Duplicate and N+1 detection:** `TrafficAnalyzer`, `analyzeTraffic()`,
+    row badges, explanations, and group views.
+  - **Statistics dashboard:** `TrafficStatistics` and `statistics()`.
+  - **Gantt timeline:** zoom, fit and tap to open.
+- **Persistence and export:**
+  - `NetworkLogEntry.fromJson` and `fromJson` for every entity.
+  - `NetworkLogPersistence`, `FileNetworkLogPersistence` and
+    `PersistentNetworkLogStore`.
+  - HAR 1.2 export (`exportHar()`), and an `exportHandler` hook for sharing.
+- **Native capture:**
+  - `recordExternalCall` and `ExternalNetworkCall`.
+  - The new `netoscope_native` plugin (OkHttp interceptor and `URLSession`
+    capture).
+- **`dart:io` capture:**
+  - `captureDartIo()`, `stopCapturingDartIo()` and `isCapturingDartIo` record
+    `HttpClient` calls (including `Image.network` and SDKs) through a chained
+    `HttpOverrides`.
+  - Calls already recorded by the Dio or `http` hooks are not doubled.
+  - Web builds are unaffected (conditional import).
+- **Client compatibility:** Retrofit, Chopper and `gql_http_link` (used by
+  `graphql`, `graphql_flutter` and `ferry`) are verified by integration tests
+  in `packages/netoscope_integration_tests`.
 - **Runtime switches:**
   - `setLoggingEnabled`, `setFloatingButtonEnabled`, `setNotificationEnabled`
     and `updateSettings`, plus `settings`, `settingsChanges` and `isRecording`.

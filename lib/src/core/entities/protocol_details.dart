@@ -1,3 +1,5 @@
+import 'json_helpers.dart';
+
 /// Protocol-specific information attached to a `NetworkLogEntry`.
 ///
 /// Netoscope ships details for GraphQL, webhooks, transfers, WebSockets, SSE,
@@ -37,6 +39,15 @@ class TransferDetails extends ProtocolDetails {
     required this.bytesTransferred,
     this.totalBytes,
   });
+
+  /// Restores details from [toJson] output.
+  factory TransferDetails.fromJson(Map<String, Object?> json) =>
+      TransferDetails(
+        direction: readEnum(TransferDirection.values, json['direction'],
+            TransferDirection.download),
+        bytesTransferred: readInt(json['bytesTransferred']) ?? 0,
+        totalBytes: readInt(json['totalBytes']),
+      );
 
   /// Upload or download.
   final TransferDirection direction;
@@ -102,6 +113,15 @@ class WebSocketDetails extends ProtocolDetails {
     this.subprotocol,
   });
 
+  /// Restores details from [toJson] output.
+  factory WebSocketDetails.fromJson(Map<String, Object?> json) =>
+      WebSocketDetails(
+        frameType: readEnumOrNull(WebSocketFrameType.values, json['frameType']),
+        closeCode: readInt(json['closeCode']),
+        closeReason: readAs<String>(json['closeReason']),
+        subprotocol: readAs<String>(json['subprotocol']),
+      );
+
   /// The frame type of a message event.
   final WebSocketFrameType? frameType;
 
@@ -143,6 +163,15 @@ class WebSocketDetails extends ProtocolDetails {
 class SseDetails extends ProtocolDetails {
   /// Creates SSE details.
   const SseDetails({this.eventType = 'message', this.eventId, this.retry});
+
+  /// Restores details from [toJson] output.
+  factory SseDetails.fromJson(Map<String, Object?> json) => SseDetails(
+        eventType: readAs<String>(json['eventType']) ?? 'message',
+        eventId: readAs<String>(json['eventId']),
+        retry: readInt(json['retryMs']) == null
+            ? null
+            : Duration(milliseconds: readInt(json['retryMs'])!),
+      );
 
   /// The `event:` field, `message` when absent.
   final String eventType;
@@ -206,6 +235,19 @@ class GrpcDetails extends ProtocolDetails {
     this.messagesReceived,
     this.isWeb = false,
   });
+
+  /// Restores details from [toJson] output.
+  factory GrpcDetails.fromJson(Map<String, Object?> json) => GrpcDetails(
+        service: readAs<String>(json['service']) ?? '',
+        method: readAs<String>(json['method']) ?? '',
+        callType: readEnum(
+            GrpcCallType.values, json['callType'], GrpcCallType.unknown),
+        statusCode: readInt(json['statusCode']),
+        statusMessage: readAs<String>(json['statusMessage']),
+        messagesSent: readInt(json['messagesSent']),
+        messagesReceived: readInt(json['messagesReceived']),
+        isWeb: json['web'] == true,
+      );
 
   /// The fully-qualified service, such as `helloworld.Greeter`.
   final String service;
@@ -303,6 +345,15 @@ class MqttDetails extends ProtocolDetails {
     this.clientId,
     this.packetId,
   });
+
+  /// Restores details from [toJson] output.
+  factory MqttDetails.fromJson(Map<String, Object?> json) => MqttDetails(
+        topic: readAs<String>(json['topic']),
+        qos: readInt(json['qos']),
+        retained: readAs<bool>(json['retained']),
+        clientId: readAs<String>(json['clientId']),
+        packetId: readInt(json['packetId']),
+      );
 
   /// The topic (or topic filter for subscriptions).
   final String? topic;

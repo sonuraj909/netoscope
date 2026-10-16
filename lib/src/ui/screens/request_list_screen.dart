@@ -5,15 +5,19 @@ import 'package:flutter/services.dart';
 
 import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_entry.dart';
+import '../../core/entities/traffic_insights.dart';
 import '../../network_inspector.dart';
 import '../network_log_filter.dart';
 import '../payload/payload_viewer.dart';
 import '../theme/inspector_theme.dart';
 import '../widgets/entry_actions.dart';
 import '../widgets/filter_sheet.dart';
+import '../widgets/search_help_sheet.dart';
 import '../widgets/settings_sheet.dart';
 import '../widgets/log_formatting.dart';
 import 'request_detail_screen.dart';
+import 'statistics_screen.dart';
+import 'timeline_screen.dart';
 
 /// Lists recorded events with search, filters, export and clearing.
 class RequestListScreen extends StatefulWidget {
@@ -48,6 +52,12 @@ class _RequestListScreenState extends State<RequestListScreen> {
   StreamSubscription<List<NetworkLogEntry>>? _subscription;
   StreamSubscription<Object?>? _settingsSubscription;
   late NetworkLogFilter _filter = widget.initialFilter;
+  TrafficInsights _insights = TrafficInsights.empty;
+
+  void _setEntries(List<NetworkLogEntry> entries) {
+    _entries = entries;
+    _insights = widget.netoscope.config.trafficAnalyzer.analyze(entries);
+  }
 
   Duration get _slowThreshold => widget.netoscope.config.slowRequestThreshold;
 
@@ -68,13 +78,13 @@ class _RequestListScreenState extends State<RequestListScreen> {
   }
 
   void _listen() {
-    _entries = widget.netoscope.logs;
+    _setEntries(widget.netoscope.logs);
     unawaited(_settingsSubscription?.cancel());
     _settingsSubscription = widget.netoscope.settingsChanges.listen((_) {
       if (mounted) setState(() {});
     });
     _subscription = widget.netoscope.logChanges.listen((entries) {
-      if (mounted) setState(() => _entries = entries);
+      if (mounted) setState(() => _setEntries(entries));
     });
   }
 
@@ -89,13 +99,116 @@ class _RequestListScreenState extends State<RequestListScreen> {
   void _updateFilter(NetworkLogFilter Function(NetworkLogFilter) update) =>
       setState(() => _filter = update(_filter));
 
-  Future<void> _export() async {
+  Future<void> _copy(String content, String message) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
-    await Clipboard.setData(ClipboardData(text: widget.netoscope.exportJson()));
-    messenger?.showSnackBar(
-      SnackBar(content: Text('Copied ${_entries.length} requests as JSON')),
-    );
+    await Clipboard.setData(ClipboardData(text: content));
+    messenger?.showSnackBar(SnackBar(content: Text(message)));
   }
+
+  Future<void> _share({required bool har}) async {
+    final handler = widget.netoscope.exportHandler;
+    if (handler == null) return;
+    final stamp =
+        DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+    try {
+      await handler(
+        NetoscopeExport(
+          fileName: 'netoscope-$stamp.${har ? 'har' : 'json'}',
+          mimeType: 'application/json',
+          content: har
+              ? widget.netoscope.exportHar()
+              : widget.netoscope.exportJson(),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('Could not share: $error')),
+      );
+    }
+  }
+
+  Future<void> _onMenu(_MenuAction action) async {
+    switch (action) {
+      case _MenuAction.copyJson:
+        await _copy(
+          widget.netoscope.exportJson(),
+          'Copied ${_entries.length} requests as JSON',
+        );
+      case _MenuAction.copyHar:
+        await _copy(widget.netoscope.exportHar(), 'Copied as HAR');
+      case _MenuAction.shareJson:
+        await _share(har: false);
+      case _MenuAction.shareHar:
+        await _share(har: true);
+      case _MenuAction.clear:
+        await _confirmClear();
+    }
+  }
+
+  void _openEntry(NetworkLogEntry entry) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => InspectorThemeScope(
+            child: RequestDetailScreen(
+              entry: entry,
+              slowThreshold: _slowThreshold,
+              payloadViewers: widget.payloadViewers,
+              onShowConnection:
+                  _filter.connectionId == null ? _showConnection : null,
+              redactionMask: widget.netoscope.config.redactionMask,
+              insights: _insights,
+              onShowCalls: _showCalls,
+            ),
+          ),
+        ),
+      );
+
+  void _showCalls(String title, NetworkLogFilter filter) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => InspectorThemeScope(
+            child: RequestListScreen(
+              netoscope: widget.netoscope,
+              payloadViewers: widget.payloadViewers,
+              title: title,
+              initialFilter: filter,
+            ),
+          ),
+        ),
+      );
+
+  void _openStatistics() => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => InspectorThemeScope(
+            child: StatisticsScreen(
+              netoscope: widget.netoscope,
+              onShowCalls: _showCalls,
+            ),
+          ),
+        ),
+      );
+
+  void _openTimeline(List<NetworkLogEntry> visible) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => InspectorThemeScope(
+            child: TimelineScreen(entries: visible, onOpenEntry: _openEntry),
+          ),
+        ),
+      );
+
+  Future<void> _openSearchHelp() => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (sheetContext) => SearchHelpSheet(
+          onExample: (example) {
+            Navigator.of(sheetContext).pop();
+            _search.text = example;
+            _updateFilter((f) => f.copyWith(query: example));
+          },
+        ),
+      );
 
   Future<void> _confirmClear() async {
     final confirmed = await showDialog<bool>(
@@ -132,21 +245,14 @@ class _RequestListScreenState extends State<RequestListScreen> {
         builder: (_) => FilterSheet(
           filter: _filter,
           entries: _entries,
+          insights: _insights,
           onUpdate: _updateFilter,
         ),
       );
 
-  void _showConnection(String connectionId) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => InspectorThemeScope(
-            child: RequestListScreen(
-              netoscope: widget.netoscope,
-              payloadViewers: widget.payloadViewers,
-              title: 'Connection events',
-              initialFilter: NetworkLogFilter(connectionId: connectionId),
-            ),
-          ),
-        ),
+  void _showConnection(String connectionId) => _showCalls(
+        'Connection events',
+        NetworkLogFilter(connectionId: connectionId),
       );
 
   String _summary(List<NetworkLogEntry> visible) {
@@ -170,7 +276,12 @@ class _RequestListScreenState extends State<RequestListScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final visible = _filter.apply(_entries, slowThreshold: _slowThreshold);
+    final visible = _filter.apply(
+      _entries,
+      slowThreshold: _slowThreshold,
+      insights: _insights,
+    );
+    final canShare = widget.netoscope.exportHandler != null;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: scheme.surface,
@@ -196,21 +307,51 @@ class _RequestListScreenState extends State<RequestListScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Timeline',
+            icon: const Icon(Icons.view_timeline_outlined),
+            onPressed: visible.isEmpty ? null : () => _openTimeline(visible),
+          ),
+          IconButton(
+            tooltip: 'Statistics',
+            icon: const Icon(Icons.insights_outlined),
+            onPressed: _openStatistics,
+          ),
+          IconButton(
             tooltip: 'Inspector settings',
             icon: const Icon(Icons.settings_outlined),
             onPressed: _openSettings,
           ),
-          IconButton(
-            tooltip: 'Copy all as JSON',
-            icon: const Icon(Icons.ios_share),
-            onPressed: _entries.isEmpty ? null : _export,
+          PopupMenuButton<_MenuAction>(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_vert),
+            enabled: _entries.isNotEmpty,
+            onSelected: _onMenu,
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: _MenuAction.copyJson,
+                child: _MenuRow(Icons.data_object, 'Copy all as JSON'),
+              ),
+              const PopupMenuItem(
+                value: _MenuAction.copyHar,
+                child: _MenuRow(Icons.description_outlined, 'Copy as HAR'),
+              ),
+              if (canShare) ...[
+                const PopupMenuItem(
+                  value: _MenuAction.shareJson,
+                  child: _MenuRow(Icons.ios_share, 'Share JSON…'),
+                ),
+                const PopupMenuItem(
+                  value: _MenuAction.shareHar,
+                  child: _MenuRow(Icons.ios_share, 'Share HAR…'),
+                ),
+              ],
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: _MenuAction.clear,
+                child: _MenuRow(Icons.delete_sweep_outlined, 'Clear history'),
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: 'Clear history',
-            icon: const Icon(Icons.delete_sweep_outlined),
-            onPressed: _entries.isEmpty ? null : _confirmClear,
-          ),
-          const SizedBox(width: 4),
         ],
       ),
       body: Column(
@@ -225,7 +366,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
               controller: _search,
               style: theme.textTheme.bodyMedium,
               decoration: InputDecoration(
-                hintText: 'Search URL, operation, event or topic',
+                hintText: 'Search or filter, e.g. status:4xx method:POST',
                 prefixIcon: const Icon(Icons.search, size: 20),
                 isDense: true,
                 filled: true,
@@ -236,7 +377,11 @@ class _RequestListScreenState extends State<RequestListScreen> {
                   borderSide: BorderSide.none,
                 ),
                 suffixIcon: _filter.query.isEmpty
-                    ? null
+                    ? IconButton(
+                        tooltip: 'Search syntax',
+                        icon: const Icon(Icons.help_outline, size: 18),
+                        onPressed: _openSearchHelp,
+                      )
                     : IconButton(
                         tooltip: 'Clear search',
                         icon: const Icon(Icons.close, size: 18),
@@ -264,14 +409,17 @@ class _RequestListScreenState extends State<RequestListScreen> {
                     padding: const EdgeInsets.only(bottom: 96),
                     itemCount: visible.length,
                     separatorBuilder: (_, __) => const Divider(indent: 36),
-                    itemBuilder: (context, index) => _RequestRow(
-                      entry: visible[index],
-                      slowThreshold: _slowThreshold,
-                      payloadViewers: widget.payloadViewers,
-                      onShowConnection:
-                          _filter.connectionId == null ? _showConnection : null,
-                      redactionMask: widget.netoscope.config.redactionMask,
-                    ),
+                    itemBuilder: (context, index) {
+                      final entry = visible[index];
+                      return _RequestRow(
+                        entry: entry,
+                        slowThreshold: _slowThreshold,
+                        redactionMask: widget.netoscope.config.redactionMask,
+                        isDuplicate: _insights.duplicateIds.contains(entry.id),
+                        isNPlusOne: _insights.nPlusOneIds.contains(entry.id),
+                        onOpen: () => _openEntry(entry),
+                      );
+                    },
                   ),
           ),
         ],
@@ -319,6 +467,20 @@ class _FilterBar extends StatelessWidget {
               label: const Text('This connection'),
               onDeleted: () =>
                   onUpdate((f) => f.copyWith(clearConnection: true)),
+            ),
+            const _ChipGap(),
+          ],
+          if (filter.ids != null) ...[
+            InputChip(
+              label: Text('${filter.ids!.length} selected calls'),
+              onDeleted: () => onUpdate((f) => f.copyWith(clearIds: true)),
+            ),
+            const _ChipGap(),
+          ],
+          if (filter.tag != null) ...[
+            InputChip(
+              label: Text('#${filter.tag}'),
+              onDeleted: () => onUpdate((f) => f.copyWith(clearTag: true)),
             ),
             const _ChipGap(),
           ],
@@ -414,16 +576,18 @@ class _RequestRow extends StatelessWidget {
   const _RequestRow({
     required this.entry,
     required this.slowThreshold,
-    required this.payloadViewers,
-    required this.onShowConnection,
     required this.redactionMask,
+    required this.isDuplicate,
+    required this.isNPlusOne,
+    required this.onOpen,
   });
 
   final NetworkLogEntry entry;
   final Duration slowThreshold;
-  final List<PayloadViewer> payloadViewers;
-  final void Function(String connectionId)? onShowConnection;
   final String redactionMask;
+  final bool isDuplicate;
+  final bool isNPlusOne;
+  final VoidCallback onOpen;
 
   bool get _isMessage => entry.kind == NetworkEventKind.message;
 
@@ -434,20 +598,6 @@ class _RequestRow extends StatelessWidget {
         : entry.responseSize;
     return formatBytes(size);
   }
-
-  void _open(BuildContext context) => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => InspectorThemeScope(
-            child: RequestDetailScreen(
-              entry: entry,
-              slowThreshold: slowThreshold,
-              payloadViewers: payloadViewers,
-              onShowConnection: onShowConnection,
-              redactionMask: redactionMask,
-            ),
-          ),
-        ),
-      );
 
   @override
   Widget build(BuildContext context) {
@@ -469,7 +619,7 @@ class _RequestRow extends StatelessWidget {
     );
     return InkWell(
       key: ValueKey(entry.id),
-      onTap: () => _open(context),
+      onTap: onOpen,
       onLongPress: () => showEntryActions(context, entry, mask: redactionMask),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
@@ -511,7 +661,11 @@ class _RequestRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${entry.url.host} · ${formatTime(entry.timestamp)}',
+                    [
+                      entry.url.host,
+                      formatTime(entry.timestamp),
+                      for (final tag in entry.tags) '#$tag',
+                    ].join(' · '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: small,
@@ -526,6 +680,14 @@ class _RequestRow extends StatelessWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (isNPlusOne || isDuplicate) ...[
+                      LogBadge(
+                        label: isNPlusOne ? 'N+1' : 'DUP',
+                        color: warningColor(scheme),
+                        filled: true,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     if (entry.hasGraphQLErrors) ...[
                       LogBadge(
                         label: 'GQL ERR',
@@ -619,4 +781,22 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+enum _MenuAction { copyJson, copyHar, shareJson, shareHar, clear }
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow(this.icon, this.label);
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 12),
+          Text(label),
+        ],
+      );
 }

@@ -1,8 +1,9 @@
-import '../core/entities/graphql_details.dart';
 import '../core/entities/network_event_kind.dart';
 import '../core/entities/network_log_entry.dart';
 import '../core/entities/payload_format.dart';
 import '../core/entities/protocol_details.dart';
+import '../core/entities/traffic_insights.dart';
+import 'search_query.dart';
 
 /// Status groups offered by the inspector's filter.
 enum StatusFilter {
@@ -86,11 +87,27 @@ class NetworkLogFilter {
     this.onlyGraphQL = false,
     this.onlyGraphQLErrors = false,
     this.connectionId,
+    this.tag,
+    this.onlyDuplicates = false,
+    this.onlyNPlusOne = false,
+    this.ids,
   });
 
-  /// Case-insensitive text matched against the URL, GraphQL operation
-  /// names, SSE event types, MQTT topics and gRPC methods.
+  /// The search box text: free text plus `key:value` filters (see
+  /// [SearchQuery]), such as `method:POST status:>=400 duration:>500`.
   final String query;
+
+  /// Only calls with this tag.
+  final String? tag;
+
+  /// Only calls detected as duplicates.
+  final bool onlyDuplicates;
+
+  /// Only calls in a detected N+1 burst.
+  final bool onlyNPlusOne;
+
+  /// Only these entries (for example one duplicate or N+1 group).
+  final Set<String>? ids;
 
   /// The required HTTP method (or protocol label), or `null` for any.
   final String? method;
@@ -141,6 +158,10 @@ class NetworkLogFilter {
         onlyGraphQL,
         onlyGraphQLErrors,
         connectionId != null,
+        tag != null,
+        onlyDuplicates,
+        onlyNPlusOne,
+        ids != null,
       ].where((active) => active).length;
 
   /// Returns a copy with the given fields replaced. The `clear…` flags reset
@@ -163,6 +184,12 @@ class NetworkLogFilter {
     bool? onlyGraphQLErrors,
     String? connectionId,
     bool clearConnection = false,
+    String? tag,
+    bool clearTag = false,
+    bool? onlyDuplicates,
+    bool? onlyNPlusOne,
+    Set<String>? ids,
+    bool clearIds = false,
   }) =>
       NetworkLogFilter(
         query: query ?? this.query,
@@ -180,16 +207,34 @@ class NetworkLogFilter {
         onlyGraphQLErrors: onlyGraphQLErrors ?? this.onlyGraphQLErrors,
         connectionId:
             clearConnection ? null : connectionId ?? this.connectionId,
+        tag: clearTag ? null : tag ?? this.tag,
+        onlyDuplicates: onlyDuplicates ?? this.onlyDuplicates,
+        onlyNPlusOne: onlyNPlusOne ?? this.onlyNPlusOne,
+        ids: clearIds ? null : ids ?? this.ids,
       );
 
-  /// Whether [entry] passes every filter. [now] anchors [timeRange].
+  SearchQuery get _search {
+    final cached = _parsed[this];
+    if (cached != null) return cached;
+    return _parsed[this] = SearchQuery.parse(query);
+  }
+
+  static final Expando<SearchQuery> _parsed = Expando('netoscope.query');
+
+  /// Whether [entry] passes every filter. [now] anchors [timeRange];
+  /// [insights] answers duplicate and N+1 filters.
   bool matches(
     NetworkLogEntry entry, {
     required Duration slowThreshold,
     DateTime? now,
+    TrafficInsights? insights,
   }) {
-    final needle = query.trim().toLowerCase();
-    if (needle.isNotEmpty && !searchText(entry).contains(needle)) {
+    final search = _search;
+    if (!search.isEmpty &&
+        !search.matches(
+          entry,
+          SearchContext(slowThreshold: slowThreshold, insights: insights),
+        )) {
       return false;
     }
     if (method != null && entry.method != method) return false;
@@ -218,6 +263,15 @@ class NetworkLogFilter {
     if (connectionId != null && entry.connectionId != connectionId) {
       return false;
     }
+    if (tag != null && !entry.tags.contains(tag)) return false;
+    if (ids != null && !ids!.contains(entry.id)) return false;
+    if (onlyDuplicates &&
+        !(insights?.duplicateIds.contains(entry.id) ?? false)) {
+      return false;
+    }
+    if (onlyNPlusOne && !(insights?.nPlusOneIds.contains(entry.id) ?? false)) {
+      return false;
+    }
     return true;
   }
 
@@ -226,31 +280,22 @@ class NetworkLogFilter {
     Iterable<NetworkLogEntry> entries, {
     required Duration slowThreshold,
     DateTime? now,
+    TrafficInsights? insights,
   }) {
     final anchor = now ?? DateTime.now();
     return [
       for (final entry in entries)
-        if (matches(entry, slowThreshold: slowThreshold, now: anchor)) entry,
+        if (matches(
+          entry,
+          slowThreshold: slowThreshold,
+          now: anchor,
+          insights: insights,
+        ))
+          entry,
     ];
   }
 
-  /// The lower-case text that the search query is matched against.
-  static String searchText(NetworkLogEntry entry) {
-    final buffer = StringBuffer(entry.url.toString());
-    for (final details in entry.details) {
-      switch (details) {
-        case GraphQLDetails(:final operations):
-          for (final op in operations) {
-            buffer.write(' ${op.type.name} ${op.name ?? ''}');
-          }
-        case SseDetails(:final eventType):
-          buffer.write(' $eventType');
-        case MqttDetails(:final topic):
-          buffer.write(' ${topic ?? ''}');
-        case GrpcDetails(:final service, :final method):
-          buffer.write(' $service/$method');
-      }
-    }
-    return buffer.toString().toLowerCase();
-  }
+  /// The lower-case text that free-text search terms are matched against.
+  static String searchText(NetworkLogEntry entry) =>
+      SearchQuery.searchText(entry);
 }

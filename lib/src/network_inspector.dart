@@ -4,7 +4,9 @@ import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 
 import 'adapters/dio/dio_network_logger.dart';
+import 'adapters/external/external_network_call.dart' as ext;
 import 'adapters/http/http_network_logger.dart';
+import 'adapters/io/dart_io_capture.dart';
 import 'adapters/log_capture.dart';
 import 'adapters/realtime/connection_recorder.dart';
 import 'adapters/realtime/grpc_call_recorder.dart';
@@ -20,14 +22,40 @@ import 'core/contracts/network_log_store.dart';
 import 'core/entities/network_event_kind.dart';
 import 'core/entities/network_log_entry.dart';
 import 'core/entities/protocol_details.dart';
+import 'core/entities/traffic_insights.dart';
+import 'core/entities/traffic_statistics.dart';
 import 'core/usecases/clear_network_logs.dart';
 import 'core/usecases/get_network_logs.dart';
 import 'core/usecases/record_network_log.dart';
+import 'data/export/har_exporter.dart';
 import 'data/export/network_log_json_exporter.dart';
 import 'data/notifications/activity_notification_controller.dart';
 import 'data/sinks/console_network_log_sink.dart';
 import 'data/storage/in_memory_network_log_store.dart';
 import 'protocols/webhook/webhook_delivery_record.dart';
+
+/// A file produced by the inspector's export menu.
+class NetoscopeExport {
+  /// Creates an export.
+  const NetoscopeExport({
+    required this.fileName,
+    required this.mimeType,
+    required this.content,
+  });
+
+  /// A suggested file name, such as `netoscope-2026-10-16.har`.
+  final String fileName;
+
+  /// The MIME type, such as `application/json`.
+  final String mimeType;
+
+  /// The file content (already redacted).
+  final String content;
+}
+
+/// Delivers an export, for example by writing it to a temporary file and
+/// opening the platform share sheet.
+typedef NetoscopeExportHandler = Future<void> Function(NetoscopeExport export);
 
 /// The entry point to Netoscope.
 ///
@@ -59,6 +87,7 @@ class Netoscope {
     Iterable<NetworkLogSink> sinks = const [],
     NetworkActivityNotifier? notifier,
     Duration notificationInterval = const Duration(seconds: 1),
+    NetoscopeExportHandler? exportHandler,
   }) {
     final ownedStore = store == null
         ? InMemoryNetworkLogStore(maxEntries: config.maxHistorySize)
@@ -77,7 +106,9 @@ class Netoscope {
         ...sinks,
       ],
       notificationInterval,
-    )..attachNotifier(notifier);
+    )
+      ..exportHandler = exportHandler
+      ..attachNotifier(notifier);
   }
 
   Netoscope._(
@@ -105,6 +136,10 @@ class Netoscope {
   /// request's options to record it as a webhook delivery attempt.
   static const String webhookKey = netoscopeWebhookKey;
 
+  /// Add `extra: {Netoscope.tagsKey: 'checkout'}` (or a list of tags) to a
+  /// Dio request's options to tag that request.
+  static const String tagsKey = netoscopeTagsKey;
+
   /// The active configuration.
   final NetworkLoggerConfig config;
 
@@ -117,6 +152,7 @@ class Netoscope {
   NetoscopeSettings _settings;
   ActivityNotificationController? _notifications;
   StreamSubscription<List<NetworkLogEntry>>? _historySubscription;
+  DartIoCapture? _dartIo;
 
   /// The minimum time between notification updates.
   final Duration notificationInterval;
@@ -206,8 +242,27 @@ class Netoscope {
   /// Removes all recorded calls.
   void clearLogs() => _clearLogs();
 
+  /// Duplicate and N+1 requests in the current history, detected with
+  /// [NetworkLoggerConfig.trafficAnalyzer].
+  TrafficInsights analyzeTraffic() => config.trafficAnalyzer.analyze(logs);
+
+  /// Aggregate statistics for the current history.
+  TrafficStatistics statistics() => TrafficStatistics.from(
+        logs,
+        slowThreshold: config.slowRequestThreshold,
+      );
+
   /// The current history as indented JSON. Values are already redacted.
   String exportJson() => exportNetworkLogsAsJson(logs);
+
+  /// The current HTTP calls as a HAR 1.2 document (importable into browser
+  /// DevTools, Charles, Proxyman or Postman). Values are already redacted.
+  String exportHar() => exportNetworkLogsAsHar(logs);
+
+  /// Shares exports from the inspector (for example through a share sheet).
+  /// When `null`, the inspector offers copying only. See
+  /// [NetoscopeExport].
+  NetoscopeExportHandler? exportHandler;
 
   /// A Dio interceptor recording into this logger.
   ///
@@ -225,6 +280,76 @@ class Netoscope {
     final client = inner ?? http.Client();
     return isEnabled ? HttpNetworkLogger(client, _capture) : client;
   }
+
+  /// Tags every call started from now on with [tag] until [removeTag] or
+  /// [clearTags]. Useful for flows: `addTag('checkout')` … `removeTag(…)`.
+  void addTag(String tag) => _capture.addTag(tag);
+
+  /// Stops tagging new calls with [tag].
+  void removeTag(String tag) => _capture.removeTag(tag);
+
+  /// Removes all tags added with [addTag].
+  void clearTags() => _capture.clearTags();
+
+  /// The tags added with [addTag].
+  Set<String> get activeTags => _capture.globalTags;
+
+  /// Runs [body] and tags every call started inside it, including calls in
+  /// its asynchronous continuations, with [tags] (a `String` or an
+  /// `Iterable<String>`). Nested calls combine tags.
+  ///
+  /// ```dart
+  /// await netoscope.tagged('login-flow', () async {
+  ///   await api.login();
+  ///   await api.loadProfile();
+  /// });
+  /// ```
+  R tagged<R>(Object tags, R Function() body) {
+    final outer = Zone.current[netoscopeTagsZoneKey];
+    return runZoned(
+      body,
+      zoneValues: {
+        netoscopeTagsZoneKey: <String>{
+          if (outer is Iterable<String>) ...outer,
+          if (tags is String) tags,
+          if (tags is Iterable) ...tags.whereType<String>(),
+        },
+      },
+    );
+  }
+
+  /// Records an HTTP call observed outside Dart, such as by native code.
+  /// It is redacted, truncated and inspected like captured calls.
+  void recordExternalCall(ext.ExternalNetworkCall call) =>
+      ext.recordExternalCall(_capture, call);
+
+  /// Records calls made with `dart:io`'s `HttpClient`: directly, through
+  /// `IOClient`, `Image.network`, third-party SDKs or any other library.
+  ///
+  /// Installs a global `HttpOverrides` that wraps every `HttpClient` created
+  /// afterwards. Clients created earlier are not captured, so call this
+  /// early, for example at the start of `main`. A previously installed
+  /// `HttpOverrides` keeps working. Calls already recorded by
+  /// [dioInterceptor] or [httpClient] are not recorded twice.
+  ///
+  /// Returns `false` (and does nothing) on the web or when logging is
+  /// disabled for this build.
+  bool captureDartIo() {
+    if (!isEnabled) return false;
+    if (_dartIo != null) return true;
+    _dartIo = installDartIoCapture(_capture);
+    return _dartIo != null;
+  }
+
+  /// Stops [captureDartIo] and restores the previous `HttpOverrides`.
+  /// `HttpClient`s created while capture was on keep recording.
+  void stopCapturingDartIo() {
+    _dartIo?.uninstall();
+    _dartIo = null;
+  }
+
+  /// Whether [captureDartIo] is active.
+  bool get isCapturingDartIo => _dartIo != null;
 
   /// Returns a recorder for a WebSocket connection to [url].
   ///
@@ -326,6 +451,7 @@ class Netoscope {
   /// history created by this instance. A store passed to the constructor is
   /// left untouched.
   Future<void> dispose() async {
+    stopCapturingDartIo();
     await _historySubscription?.cancel();
     _notifications?.dispose();
     await _settingsChanges.close();

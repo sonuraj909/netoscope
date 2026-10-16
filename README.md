@@ -17,8 +17,14 @@ in-memory store, and an optional in-app inspector lets you browse it.
 - [What is supported](#what-is-supported)
 - [Installation](#installation)
 - [HTTP: Dio and package:http](#http-dio-and-packagehttp)
+- [Client compatibility](#client-compatibility)
+- [dart:io HttpClient](#dartio-httpclient)
 - [Console-only setup](#console-only-setup)
 - [Inspector](#inspector)
+- [Deep inspection](#deep-inspection): search syntax, tags, duplicates & N+1,
+  statistics, timeline
+- [History persistence & export](#history-persistence--export)
+- [Native capture (Android & iOS)](#native-capture-android--ios)
 - [Runtime switches](#runtime-switches)
 - [Notification](#notification)
 - [Configuration](#configuration)
@@ -43,6 +49,9 @@ streams.
 | --- | --- | --- |
 | HTTP via Dio | Automatic (`netoscope.dioInterceptor`) | Includes upload/download progress when the app sets progress callbacks |
 | HTTP via `package:http` | Automatic (`netoscope.httpClient()`) | |
+| Retrofit, Chopper, GraphQL clients, `cupertino_http`, `cronet_http` | Automatic, through the Dio or `http` hook they are built on | See [Client compatibility](#client-compatibility) |
+| `dart:io` `HttpClient` | Automatic after `netoscope.captureDartIo()` | Also covers `Image.network` and SDKs; not on the web |
+| Native Android (OkHttp) & iOS (`URLSession`) | `netoscope_native` plugin | Native code and SDKs; see [Native capture](#native-capture-android--ios) |
 | GraphQL over HTTP | Automatic, through either HTTP integration | Operations, variables, errors, partial data, batches, persisted queries, multipart uploads |
 | GraphQL over WebSocket | Automatic, with `WebSocketRecorder` | `graphql-transport-ws` and `subscriptions-transport-ws` messages |
 | Server-Sent Events | Automatic with `netoscope.httpClient()`; recorder for other clients | Events are recorded as they arrive; the stream is not buffered |
@@ -105,6 +114,78 @@ dio.get('/metrics', options: Options(extra: {Netoscope.skipLoggingKey: true}));
 This includes cancelled downloads. Your callback still runs first, with the
 same arguments. No callback is added to requests that have none. Turn this off
 with `captureTransferProgress: false`.
+
+## Client compatibility
+
+Netoscope hooks into Dio and `package:http`. Most Dart HTTP clients are built
+on one of the two, so one line of setup covers them.
+
+| Client | Setup | Verified |
+| --- | --- | --- |
+| **Dio** | `dio.interceptors.add(netoscope.dioInterceptor)` | ✅ tests |
+| **Retrofit** (`retrofit`) | Add the interceptor to the Dio you pass to the generated API | ✅ integration test with generated code |
+| **`package:http`** | `netoscope.httpClient()` / `netoscope.httpClient(inner)` | ✅ tests |
+| **Chopper** | `ChopperClient(client: netoscope.httpClient(), …)` | ✅ integration test |
+| **`graphql` / `graphql_flutter`** | `HttpLink(url, httpClient: netoscope.httpClient())` | ✅ via `gql_http_link` integration test |
+| **`ferry`** | `HttpLink(url, httpClient: netoscope.httpClient())` (`gql_http_link`) | ✅ via `gql_http_link` integration test |
+| **`cupertino_http`, `cronet_http`** | `netoscope.httpClient(CupertinoClient.defaultSessionConfiguration())` | Not tested here (native) |
+| **`dart:io` `HttpClient`**, `Image.network`, SDKs | `netoscope.captureDartIo()` | ✅ tests over real sockets |
+
+```dart
+// Retrofit
+final dio = Dio()..interceptors.add(netoscope.dioInterceptor);
+final api = UserApi(dio, baseUrl: 'https://api.example.com');
+
+// Chopper
+final chopper = ChopperClient(
+  baseUrl: Uri.parse('https://api.example.com'),
+  client: netoscope.httpClient(),
+  converter: const JsonConverter(),
+);
+
+// graphql / graphql_flutter / ferry
+final link = HttpLink(
+  'https://api.example.com/graphql',
+  httpClient: netoscope.httpClient(),
+);
+```
+
+The integration tests live in
+[`packages/netoscope_integration_tests`](packages/netoscope_integration_tests).
+They run Retrofit (with generated code), Chopper and `gql_http_link` against
+a local server.
+
+## dart:io HttpClient
+
+Code that uses `HttpClient` directly isn't seen by the Dio or `http` hooks.
+That includes your own code, Flutter's `Image.network` and many SDKs.
+Capture it with one call, as early as possible, for example at the start of
+`main`:
+
+```dart
+final netoscope = Netoscope();
+netoscope.captureDartIo(); // returns false on the web or when disabled
+```
+
+How it works:
+- **Global wrapper:** it installs a `HttpOverrides` that wraps every
+  `HttpClient` created afterwards. An existing `HttpOverrides` (for example a
+  proxy or certificate setup) keeps working underneath. `stopCapturingDartIo()`
+  restores it.
+- **No duplicates:** Dio's default adapter and `package:http`'s `IOClient`
+  also use `HttpClient`. Calls already recorded by `dioInterceptor` or
+  `httpClient()` are skipped.
+- **Pass-through:** requests and responses go through unchanged. Bodies are
+  observed as the app reads them.
+- **Media:** responses such as images are counted, not buffered.
+- **Event streams:** `text/event-stream` responses are recorded as SSE.
+
+Limitations:
+- `HttpClient`s created before `captureDartIo()` aren't wrapped.
+- Code that sets its own `HttpOverrides` later replaces the wrapper.
+- The duplicate check matches method and URL, so two identical calls opened
+  at the same moment by different layers may be attributed to one.
+- Not available on the web. Browser `fetch`/XHR calls aren't visible to Dart.
 
 ## Console-only setup
 
@@ -228,6 +309,157 @@ netoscope.openInspector(context, payloadViewers: const [CsvViewer()]);
 
 `NetworkInspector`, `NetworkInspectorButton` and `NetworkInspectorOverlay`
 accept the same `payloadViewers` parameter.
+
+## Deep inspection
+
+### Search syntax
+
+The search box accepts free text and `key:value` filters. Every term must
+match; commas separate alternatives; `-` or `!` negates a term; quote values
+with spaces. Tap **?** in the search box for a cheat sheet.
+
+```
+method:POST status:>=400                 failed writes
+host:api.example.com duration:>500       slow calls to one host
+is:n+1                                   calls in an N+1 burst
+tag:checkout -status:2xx                 problems in the checkout flow
+op:GetUser is:error                      a failing GraphQL operation
+body:"not found"  header:authorization   body text, header names
+protocol:ws,sse  source:ios  size:>100kb
+```
+
+| Key | Values |
+| --- | --- |
+| `method:` | `GET`, `post,put` |
+| `status:` | `404`, `4xx`, `>=500`, `200-299`, `ok`, `error`, `cancelled` |
+| `host:` `path:` `url:` | part of the URL |
+| `duration:` | `>500`, `>=1s`, `100-300ms` |
+| `size:` | response size: `>10kb`, `<1mb` |
+| `protocol:` | `http`, `ws`, `sse`, `grpc`, `mqtt` |
+| `tag:` | a tag set in code |
+| `is:` | `slow`, `error`, `success`, `graphql`, `duplicate`, `n+1`, `cancelled`, `message`, `connection`, `webhook`, `tagged` |
+| `op:` | GraphQL operation name |
+| `header:` `body:` | header name, body text |
+| `event:` `topic:` `source:` | SSE event type, MQTT topic, native source |
+
+The **Filters** sheet also offers tags and duplicate/N+1 toggles as chips.
+
+### Tagging calls
+
+```dart
+// Tag everything inside a flow, across Dio, http, dart:io and recorders,
+// including async continuations.
+await netoscope.tagged('login-flow', () async {
+  await api.login();
+  await api.loadProfile();
+});
+
+netoscope.addTag('checkout');    // tag every call until removed
+netoscope.removeTag('checkout');
+
+dio.get('/cart', options: Options(extra: {Netoscope.tagsKey: 'cart'})); // one request
+```
+
+Tags appear as `#tag` in rows and details, in exports, and in `tag:`
+searches.
+
+### Duplicate and N+1 detection
+
+Netoscope flags two patterns automatically:
+- **Duplicates:** identical requests (method, URL and body) repeated within a
+  short window.
+- **N+1:** a burst of calls to one endpoint pattern that differ only by an ID,
+  such as `GET /users/{id}` five or more times. IDs are recognized as numbers,
+  UUIDs, hex and token-like segments.
+
+Flagged calls get **DUP** or **N+1** badges, an explanation with a suggested
+fix in their details, and a "Show all" link to the whole group. They're also
+available programmatically:
+
+```dart
+final insights = netoscope.analyzeTraffic();
+for (final group in insights.nPlusOne) {
+  print('${group.pattern}: ${group.count} calls in ${group.span}');
+}
+```
+
+Tune detection with `NetworkLoggerConfig(trafficAnalyzer: TrafficAnalyzer(
+window: …, duplicateThreshold: …, nPlusOneThreshold: …))`.
+
+### Statistics
+
+The **Statistics** screen (chart icon) updates live and shows:
+- **Headline numbers:** requests, success rate, average and p95 latency,
+  data received and sent, slow and failed counts.
+- **A status-code ratio bar.**
+- **Breakdowns by method, protocol and host.**
+- **The slowest and most-called endpoints.**
+- **Redundant-traffic findings.**
+
+The same numbers are available as `netoscope.statistics()`.
+
+### Timeline
+
+The **Timeline** screen is a Gantt view of the calls in the current filter:
+- **Bars:** each call is a bar from start to end, colored by outcome and
+  labelled with its duration.
+- **Connections and events:** connections appear as lifetime bars, and
+  messages and other events as dots.
+- **Controls:** zoom with the buttons or a pinch, use **Fit** to see
+  everything, and tap a row to open the call.
+
+## History persistence & export
+
+History is in memory by default. To keep it across restarts, use a
+persistent store. History is written debounced and atomically, and corrupt
+files are ignored:
+
+```dart
+final dir = await getApplicationSupportDirectory(); // package:path_provider
+final store = await PersistentNetworkLogStore.open(
+  FileNetworkLogPersistence('${dir.path}/netoscope_history.json'),
+  maxEntries: 200,
+);
+final netoscope = Netoscope(store: store);
+```
+
+Persisted entries are the already-redacted ones, but they can still contain
+personal data. Only persist where that is acceptable. To store history
+elsewhere, implement `NetworkLogPersistence`.
+
+**Export.** The inspector's **⋮** menu copies the history as JSON or as
+**HAR 1.2**, which Chrome DevTools, Charles, Proxyman and Postman can import.
+From code, use `netoscope.exportJson()` and `netoscope.exportHar()`. To offer
+**Share…**, provide a handler. Netoscope itself doesn't depend on a share
+plugin:
+
+```dart
+final netoscope = Netoscope(
+  exportHandler: (export) => SharePlus.instance.share(ShareParams(
+    files: [XFile.fromData(utf8.encode(export.content),
+        mimeType: export.mimeType, name: export.fileName)],
+  )),
+);
+```
+
+## Native capture (Android & iOS)
+
+The [`netoscope_native`](packages/netoscope_native) plugin records calls made
+by native code and SDKs into the same history. They are redacted in Dart and
+labelled with `source: android` or `source: ios`:
+
+```dart
+await NetoscopeNative.attach(netoscope, captureAllUrlSessions: true);
+```
+
+- **Android:** add `NetoscopeInterceptor()` to your OkHttp clients.
+- **iOS:** `URLSession.shared` is captured automatically.
+  `captureAllUrlSessions` also covers sessions created from
+  `.default`/`.ephemeral` configurations.
+
+Verified by an integration test on the Android emulator and the iOS
+simulator. See the plugin README for limitations.
+Other native sources can be recorded with `netoscope.recordExternalCall(…)`.
 
 ## Runtime switches
 
@@ -758,6 +990,9 @@ streams and hand-built protocol fixtures. They never touch the network.
     call's duration is unknown.
   - SSE over Dio needs the manual `serverSentEvents` recorder.
   - Decoded JSON without `Content-Length` has no size.
+- **`dart:io` capture** only wraps `HttpClient`s created after
+  `captureDartIo()`, and is replaced if other code installs `HttpOverrides`
+  later.
 - **Recorder-based protocols** (WebSocket, native gRPC, MQTT, custom) see only
   what you route through the recorder. Netoscope does not hook sockets.
 - **GraphQL:**

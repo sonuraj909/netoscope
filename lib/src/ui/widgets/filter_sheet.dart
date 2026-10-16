@@ -4,6 +4,7 @@ import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_entry.dart';
 import '../../core/entities/payload_format.dart';
 import '../../core/entities/protocol_details.dart';
+import '../../core/entities/traffic_insights.dart';
 import '../network_log_filter.dart';
 
 /// A bottom sheet with the less frequently used filters. Changes apply
@@ -15,7 +16,11 @@ class FilterSheet extends StatefulWidget {
     required this.filter,
     required this.entries,
     required this.onUpdate,
+    this.insights,
   });
+
+  /// Duplicate and N+1 findings, for the redundancy filters.
+  final TrafficInsights? insights;
 
   /// The filter when the sheet opened.
   final NetworkLogFilter filter;
@@ -35,6 +40,9 @@ class FilterSheet extends StatefulWidget {
         f.timeRange != TimeRangeFilter.all,
         f.onlyGraphQL,
         f.onlyGraphQLErrors,
+        f.tag != null,
+        f.onlyDuplicates,
+        f.onlyNPlusOne,
       ].where((active) => active).length;
 
   @override
@@ -73,6 +81,8 @@ class _FilterSheetState extends State<FilterSheet> {
       ...formats.where((f) => !PayloadFormat.builtIn.contains(f)),
     ];
     final hasMessages = entries.any((e) => e.direction != null);
+    final tags = {for (final e in entries) ...e.tags}.toList()..sort();
+    final insights = widget.insights;
     final hasGraphQL = entries.any((e) => e.graphQL != null);
 
     return SafeArea(
@@ -94,6 +104,7 @@ class _FilterSheetState extends State<FilterSheet> {
                     (f) => NetworkLogFilter(
                       query: f.query,
                       connectionId: f.connectionId,
+                      ids: f.ids,
                     ),
                   ),
                   child: const Text('Reset'),
@@ -129,6 +140,44 @@ class _FilterSheetState extends State<FilterSheet> {
                   ),
               ],
             ),
+            if (tags.isNotEmpty)
+              _Section(
+                title: 'Tags',
+                children: [
+                  for (final tag in tags)
+                    FilterChip(
+                      label: Text('#$tag'),
+                      selected: _filter.tag == tag,
+                      onSelected: (selected) => _update(
+                        (f) => selected
+                            ? f.copyWith(tag: tag)
+                            : f.copyWith(clearTag: true),
+                      ),
+                    ),
+                ],
+              ),
+            if (insights != null && !insights.isEmpty)
+              _Section(
+                title: 'Redundant traffic',
+                children: [
+                  if (insights.duplicates.isNotEmpty)
+                    FilterChip(
+                      label: Text(
+                        'Duplicates (${insights.duplicateIds.length})',
+                      ),
+                      selected: _filter.onlyDuplicates,
+                      onSelected: (v) =>
+                          _update((f) => f.copyWith(onlyDuplicates: v)),
+                    ),
+                  if (insights.nPlusOne.isNotEmpty)
+                    FilterChip(
+                      label: Text('N+1 (${insights.nPlusOneIds.length})'),
+                      selected: _filter.onlyNPlusOne,
+                      onSelected: (v) =>
+                          _update((f) => f.copyWith(onlyNPlusOne: v)),
+                    ),
+                ],
+              ),
             if (hasGraphQL)
               _Section(
                 title: 'GraphQL',

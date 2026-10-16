@@ -212,6 +212,7 @@ class ConnectionRecorder {
         requestSize: requestSize,
         responseSize: responseSize,
         details: details,
+        tags: capture.currentTags(),
         metadata: capture.redactor.redactHeaders(metadata),
       ),
     );

@@ -1,3 +1,4 @@
+import 'json_helpers.dart';
 import 'protocol_details.dart';
 
 /// Where webhook delivery information came from.
@@ -43,6 +44,20 @@ class WebhookDetails extends ProtocolDetails {
     this.signatureAlgorithm,
     this.deliveryError,
   });
+
+  /// Restores details from [toJson] output.
+  factory WebhookDetails.fromJson(Map<String, Object?> json) => WebhookDetails(
+        outcome: readEnum(
+            WebhookOutcome.values, json['outcome'], WebhookOutcome.unknown),
+        source: readEnum(
+            WebhookSource.values, json['source'], WebhookSource.outbound),
+        eventType: readAs<String>(json['eventType']),
+        deliveryId: readAs<String>(json['deliveryId']),
+        attempt: readInt(json['attempt']),
+        maxAttempts: readInt(json['maxAttempts']),
+        signatureAlgorithm: readAs<String>(json['signatureAlgorithm']),
+        deliveryError: readAs<String>(json['deliveryError']),
+      );
 
   /// The result of this attempt.
   final WebhookOutcome outcome;

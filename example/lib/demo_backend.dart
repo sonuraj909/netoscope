@@ -19,7 +19,15 @@ class DemoBackendAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final path = options.uri.path;
+    final userId = RegExp(r'^/users/(\d+)$').firstMatch(path)?.group(1);
+    if (userId != null) {
+      await _latency(Duration(milliseconds: 60 + int.parse(userId) * 15));
+      return _json({'id': int.parse(userId), 'name': 'User $userId'});
+    }
     switch (path) {
+      case '/me':
+        await _latency(const Duration(milliseconds: 110));
+        return _json({'id': 1, 'name': 'Ada Lovelace', 'plan': 'pro'});
       case '/graphql':
         await _latency(const Duration(milliseconds: 150));
         return _json({

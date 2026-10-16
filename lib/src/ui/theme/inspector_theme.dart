@@ -209,3 +209,32 @@ class InspectorThemeScope extends StatelessWidget {
 
 /// Numbers that line up in columns.
 const List<FontFeature> tabularFigures = [FontFeature.tabularFigures()];
+
+/// Status colors for charts (validated status palette). Always pair them
+/// with a label or icon; color never carries meaning alone.
+abstract final class StatusColors {
+  /// Success.
+  static const Color good = Color(0xFF0CA30C);
+
+  /// Client errors and other attention-worthy states.
+  static const Color warning = Color(0xFFFAB219);
+
+  /// Server errors.
+  static const Color serious = Color(0xFFEC835A);
+
+  /// Failures without a response.
+  static const Color critical = Color(0xFFD03B3B);
+
+  /// Neutral states (redirects, cancellations, other).
+  static const Color neutral = Color(0xFF8A94A6);
+
+  /// The chart color for a status class (`2xx`, `3xx`, `4xx`, `5xx`,
+  /// `Failed`).
+  static Color forStatusClass(String statusClass) => switch (statusClass) {
+        '2xx' => good,
+        '4xx' => warning,
+        '5xx' => serious,
+        'Failed' => critical,
+        _ => neutral,
+      };
+}

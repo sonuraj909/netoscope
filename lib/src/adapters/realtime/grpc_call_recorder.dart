@@ -34,6 +34,7 @@ class GrpcCallRecorder {
         _metadata = metadata,
         _encode = encodeMessage,
         _id = _capture.nextId(),
+        _tags = _capture.currentTags(),
         _startedAt = DateTime.now(),
         isActive = _capture.shouldLog(
           (host ?? Uri(scheme: 'grpc', host: 'unknown')).replace(path: path),
@@ -46,6 +47,7 @@ class GrpcCallRecorder {
   final Map<String, String> _metadata;
   final Object? Function(Object? message)? _encode;
   final String _id;
+  final List<String> _tags;
   final DateTime _startedAt;
   final Stopwatch _stopwatch = Stopwatch();
   NetworkLogBody? _firstSent;
@@ -117,6 +119,7 @@ class GrpcCallRecorder {
         requestBody: outgoing ? body : null,
         responseBody: outgoing ? null : body,
         details: [_details()],
+        tags: _tags,
       ),
     );
   }
@@ -193,6 +196,7 @@ class GrpcCallRecorder {
         responseBody: _firstReceived,
         error: error,
         details: [details],
+        tags: _tags,
       );
     });
   }

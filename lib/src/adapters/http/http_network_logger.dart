@@ -58,6 +58,7 @@ class HttpNetworkLogger extends http.BaseClient {
           ),
         ),
       ),
+      tags: _capture.currentTags(),
       mayNeedResponseBytes: GrpcWebInspector.isGrpc(contentType) ||
           (_capture.config.detectGraphQL &&
               _capture.graphQL.inspectHttp(
@@ -70,11 +71,16 @@ class HttpNetworkLogger extends http.BaseClient {
     );
 
     final http.StreamedResponse response;
+    // Claim the call while the inner client opens it, so dart:io capture
+    // (if enabled) does not record it a second time.
+    _capture.claim(request.method, request.url);
     try {
       response = await _inner.send(request);
     } catch (error) {
       _record(call, error: error);
       rethrow;
+    } finally {
+      _capture.release(request.method, request.url);
     }
     if (_isEventStream(response)) return _observeEvents(response, call);
     return _observe(response, call);
@@ -195,6 +201,7 @@ class HttpNetworkLogger extends http.BaseClient {
         duration: duration,
         protocol: inspection.protocol,
         details: inspection.details,
+        tags: call.tags,
         requestHeaders: _capture.headers(request.headers),
         requestBody: call.requestBody,
         requestSize: request.contentLength,
@@ -281,6 +288,7 @@ class _PendingCall {
     required this.requestPayload,
     required this.requestBody,
     required this.mayNeedResponseBytes,
+    required this.tags,
   })  : startedAt = DateTime.now(),
         stopwatch = Stopwatch()..start();
 
@@ -289,6 +297,7 @@ class _PendingCall {
   final Object? requestPayload;
   final NetworkLogBody? requestBody;
   final bool mayNeedResponseBytes;
+  final List<String> tags;
   final DateTime startedAt;
   final Stopwatch stopwatch;
 }

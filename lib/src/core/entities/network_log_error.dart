@@ -1,3 +1,5 @@
+import 'json_helpers.dart';
+
 /// The category of a failed network call.
 enum NetworkErrorType {
   /// Connecting, sending or receiving took longer than allowed.
@@ -23,6 +25,14 @@ enum NetworkErrorType {
 class NetworkLogError {
   /// Creates an error description.
   const NetworkLogError({required this.type, required this.message});
+
+  /// Restores an error from [toJson] output.
+  factory NetworkLogError.fromJson(Map<String, Object?> json) =>
+      NetworkLogError(
+        type: readEnum(
+            NetworkErrorType.values, json['type'], NetworkErrorType.unknown),
+        message: json['message'] is String ? json['message']! as String : '',
+      );
 
   /// The failure category.
   final NetworkErrorType type;

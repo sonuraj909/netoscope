@@ -1,17 +1,62 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:netoscope/netoscope.dart';
+import 'package:netoscope_native/netoscope_native.dart';
 import 'package:netoscope_notifications/netoscope_notifications.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'demo_backend.dart';
+import 'local_server.dart';
+import 'native_demo.dart';
 
-void main() => runApp(const NetoscopeExampleApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Optional: keep history across restarts (not available on the web).
+  NetworkLogStore? store;
+  if (!kIsWeb) {
+    final dir = await getApplicationSupportDirectory();
+    store = await PersistentNetworkLogStore.open(
+      FileNetworkLogPersistence('${dir.path}/netoscope_history.json'),
+      maxEntries: 200,
+    );
+  }
+  runApp(
+    NetoscopeExampleApp(store: store, localServer: await startLocalServer()),
+  );
+}
+
+/// Shares an inspector export through the platform share sheet.
+Future<void> _shareExport(NetoscopeExport export) async {
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [
+        XFile.fromData(
+          utf8.encode(export.content),
+          mimeType: export.mimeType,
+          name: export.fileName,
+        ),
+      ],
+      fileNameOverrides: [export.fileName],
+      subject: export.fileName,
+    ),
+  );
+}
 
 class NetoscopeExampleApp extends StatefulWidget {
-  const NetoscopeExampleApp({super.key});
+  const NetoscopeExampleApp({super.key, this.store, this.localServer});
+
+  /// A persistent history store, or `null` for in-memory history.
+  final NetworkLogStore? store;
+
+  /// The loopback server for native and dart:io demos (not on the web).
+  final Uri? localServer;
 
   @override
   State<NetoscopeExampleApp> createState() => _NetoscopeExampleAppState();
@@ -29,7 +74,9 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
 
   // 1. Create one logger for the whole app. Logging is automatically off in
   //    release builds unless `enabled: true` is passed.
-  final _netoscope = Netoscope(
+  late final _netoscope = Netoscope(
+    store: widget.store,
+    exportHandler: _shareExport,
     config: const NetworkLoggerConfig(
       slowRequestThreshold: Duration(seconds: 2),
       sensitiveKeys: {'email'},
@@ -51,6 +98,10 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
     super.initState();
     // 5. Optional: a quiet notification with recent activity. Tapping it
     //    opens the inspector. Returns null where notifications can't run.
+    // 6. Optional: capture HttpClient (dart:io) and native (OkHttp,
+    //    URLSession) traffic too.
+    _netoscope.captureDartIo();
+    unawaited(NetoscopeNative.attach(_netoscope, captureAllUrlSessions: true));
     unawaited(
       NetoscopeNotifications.attach(
         _netoscope,
@@ -95,6 +146,7 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
         netoscope: _netoscope,
         dio: _dio,
         httpClient: _http,
+        localServer: widget.localServer,
         isDark: _themeMode == ThemeMode.dark,
         onToggleTheme: _toggleTheme,
       ),
@@ -108,6 +160,7 @@ class DemoScreen extends StatefulWidget {
     required this.netoscope,
     required this.dio,
     required this.httpClient,
+    this.localServer,
     required this.isDark,
     required this.onToggleTheme,
   });
@@ -115,6 +168,7 @@ class DemoScreen extends StatefulWidget {
   final Netoscope netoscope;
   final Dio dio;
   final http.Client httpClient;
+  final Uri? localServer;
   final bool isDark;
   final VoidCallback onToggleTheme;
 
@@ -125,7 +179,7 @@ class DemoScreen extends StatefulWidget {
 class _DemoScreenState extends State<DemoScreen> {
   String _status = 'Tap a request to send it.';
 
-  Future<void> _run(String label, Future<Object?> Function() request) async {
+  Future<void> _run(String label, Future<void> Function() request) async {
     setState(() => _status = '$label…');
     try {
       await request();
@@ -133,6 +187,8 @@ class _DemoScreenState extends State<DemoScreen> {
     } on DioException catch (error) {
       // Netoscope never swallows errors: your own handling still runs.
       _setStatus('$label: ${error.type.name}');
+    } on PlatformException catch (error) {
+      _setStatus('$label: ${error.message}');
     }
   }
 
@@ -192,6 +248,9 @@ class _DemoScreenState extends State<DemoScreen> {
   @override
   Widget build(BuildContext context) {
     final dio = widget.dio;
+    List<_Demo> nativeDemos(Uri server) => [
+      for (final demo in NativeDemo.all(server)) _Demo.from(demo),
+    ];
     final sections = <_DemoSection>[
       _DemoSection('REST', [
         _Demo(
@@ -202,13 +261,19 @@ class _DemoScreenState extends State<DemoScreen> {
         ),
         _Demo(
           'POST /auth/login (redacted)',
-          'Password, email, Authorization and tokens are masked.',
+          'Secrets masked; tagged #login-flow with the /me call that follows.',
           Icons.lock_outline,
-          () => dio.post<void>(
-            '/auth/login',
-            data: {'email': 'ada@example.com', 'password': 'hunter2'},
-            options: Options(headers: {'Authorization': 'Basic ZGVtbzpkZW1v'}),
-          ),
+          // Every call inside is tagged, whichever client makes it.
+          () => widget.netoscope.tagged('login-flow', () async {
+            await dio.post<void>(
+              '/auth/login',
+              data: {'email': 'ada@example.com', 'password': 'hunter2'},
+              options: Options(
+                headers: {'Authorization': 'Basic ZGVtbzpkZW1v'},
+              ),
+            );
+            await dio.get<void>('/me');
+          }),
         ),
         _Demo(
           'GET /search?api_key=…',
@@ -260,6 +325,27 @@ class _DemoScreenState extends State<DemoScreen> {
           () => dio.get<void>('/health'),
         ),
       ]),
+      _DemoSection('Insights', [
+        _Demo(
+          'Load users one by one (N+1)',
+          'A list, then 8 separate item calls: flagged as N+1.',
+          Icons.account_tree_outlined,
+          () async {
+            await dio.get<void>('/users');
+            await Future.wait([
+              for (var id = 1; id <= 8; id++) dio.get<void>('/users/$id'),
+            ]);
+          },
+        ),
+        _Demo(
+          'Duplicate requests',
+          'The same call fired three times at once: flagged as duplicates.',
+          Icons.content_copy_outlined,
+          () => Future.wait([for (var i = 0; i < 3; i++) dio.get<void>('/me')]),
+        ),
+      ]),
+      if (widget.localServer case final server?)
+        _DemoSection('Native & dart:io', nativeDemos(server)),
       _DemoSection('Protocols', [
         _Demo(
           'GraphQL query (partial errors)',
@@ -385,10 +471,14 @@ class _DemoScreenState extends State<DemoScreen> {
 class _Demo {
   const _Demo(this.label, this.description, this.icon, this.run);
 
+  /// A demo built from [NativeDemo].
+  _Demo.from(NativeDemo demo)
+    : this(demo.label, demo.description, demo.icon, demo.run);
+
   final String label;
   final String description;
   final IconData icon;
-  final Future<Object?> Function() run;
+  final Future<void> Function() run;
 }
 
 class _DemoSection {

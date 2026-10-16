@@ -1,4 +1,5 @@
 import '../core/contracts/payload_decoder.dart';
+import '../core/usecases/analyze_traffic.dart';
 import '../protocols/webhook/webhook_config.dart';
 
 /// How much of each call is written to the console.
@@ -49,6 +50,7 @@ class NetworkLoggerConfig {
     this.webhooks = const WebhookConfig(),
     this.captureTransferProgress = true,
     this.captureRealtimeMessages = true,
+    this.trafficAnalyzer = const TrafficAnalyzer(),
   })  : assert(maxHistorySize > 0, 'maxHistorySize must be positive'),
         assert(maxBodySize >= 0, 'maxBodySize must not be negative');
 
@@ -129,6 +131,9 @@ class NetworkLoggerConfig {
   /// connections evict older history, so consider turning this off or
   /// filtering messages per connection.
   final bool captureRealtimeMessages;
+
+  /// How duplicate and N+1 requests are detected.
+  final TrafficAnalyzer trafficAnalyzer;
 
   /// Whether logging is active for the current build mode.
   bool get isEnabled =>

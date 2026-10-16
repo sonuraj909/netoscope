@@ -18,6 +18,16 @@ const String netoscopeSkipKey = 'netoscope.skip';
 /// webhook delivery attempt.
 const String netoscopeWebhookKey = 'netoscope.webhook';
 
+/// Set `extra[netoscopeTagsKey]` to a tag or a list of tags for one request.
+const String netoscopeTagsKey = 'netoscope.tags';
+
+Iterable<String> _requestTags(RequestOptions options) {
+  final value = options.extra[netoscopeTagsKey];
+  if (value is String) return [value];
+  if (value is Iterable) return value.whereType<String>();
+  return const [];
+}
+
 /// A Dio [Interceptor] that records every call it sees.
 ///
 /// It only observes: requests, responses and errors are always passed on
@@ -40,8 +50,10 @@ class DioNetworkLogger extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     if (_capture.isRecording) {
-      final timing = _Timing(_capture.nextId());
+      final timing = _Timing(_capture.nextId(), options.method, options.uri);
+      timing.tags = _capture.currentTags(_requestTags(options));
       _timings[options] = timing;
+      _capture.claim(timing.method, timing.uri);
       if (_capture.config.captureTransferProgress) {
         _observeProgress(options, timing);
       }
@@ -103,6 +115,7 @@ class DioNetworkLogger extends Interceptor {
   ) {
     final timing = _timings[options];
     _timings[options] = null;
+    if (timing != null) _capture.release(timing.method, timing.uri);
     _capture.record(() {
       if (options.extra[netoscopeSkipKey] == true) return null;
       final uri = options.uri;
@@ -138,6 +151,7 @@ class DioNetworkLogger extends Interceptor {
         duration: timing?.stopwatch.elapsed,
         protocol: inspection.protocol,
         details: [...inspection.details, ...?timing?.transfers()],
+        tags: timing?.tags ?? _capture.currentTags(_requestTags(options)),
         requestHeaders: _capture.headers(rawRequestHeaders),
         requestBody: _capture.requestBody(
           (b) => _requestBody(
@@ -262,13 +276,16 @@ class DioNetworkLogger extends Interceptor {
 }
 
 class _Timing {
-  _Timing(this.id)
+  _Timing(this.id, this.method, this.uri)
       : startedAt = DateTime.now(),
         stopwatch = Stopwatch()..start();
 
   final String id;
+  final String method;
+  final Uri uri;
   final DateTime startedAt;
   final Stopwatch stopwatch;
+  List<String> tags = const [];
   int? sent;
   int? sendTotal;
   int? received;
