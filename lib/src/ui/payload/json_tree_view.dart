@@ -107,20 +107,23 @@ class _JsonNodeState extends State<_JsonNode> {
                 color: palette.punctuation,
               ),
               const SizedBox(width: 2),
-              Text.rich(
-                TextSpan(
-                  children: [
-                    if (label != null) label,
-                    TextSpan(
-                      text: _expanded
-                          ? open
-                          : '$open … $close  ${children.length} '
-                              '${children.length == 1 ? 'item' : 'items'}',
-                      style: TextStyle(color: palette.punctuation),
-                    ),
-                  ],
+              // Long keys wrap rather than overflow on narrow screens.
+              Flexible(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      if (label != null) label,
+                      TextSpan(
+                        text: _expanded
+                            ? open
+                            : '$open … $close  ${children.length} '
+                                '${children.length == 1 ? 'item' : 'items'}',
+                        style: TextStyle(color: palette.punctuation),
+                      ),
+                    ],
+                  ),
+                  style: style,
                 ),
-                style: style,
               ),
             ],
           ),

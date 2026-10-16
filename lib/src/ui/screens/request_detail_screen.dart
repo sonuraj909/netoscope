@@ -17,6 +17,7 @@ import '../payload/syntax_highlighter.dart';
 import '../theme/inspector_theme.dart';
 import '../widgets/entry_actions.dart';
 import '../widgets/log_formatting.dart';
+import '../widgets/readable_width.dart';
 import '../widgets/section_card.dart';
 
 /// Shows everything captured for a single event.
@@ -199,7 +200,7 @@ class _OverviewTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final error = entry.error;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: readablePadding(context),
       children: [
         _Summary(entry: entry, slowThreshold: slowThreshold, mask: mask),
         for (final (kind, group) in groups)
@@ -588,7 +589,7 @@ class _HandshakeTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: readablePadding(context),
       children: [
         SectionCard(
           title: 'Request headers',
@@ -631,7 +632,7 @@ class _PayloadTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: readablePadding(context),
       children: [
         if (showHeaders)
           SectionCard(
@@ -762,7 +763,7 @@ class _GraphQLTab extends StatelessWidget {
     final theme = Theme.of(context);
     final hasData = details.hasData;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: readablePadding(context),
       children: [
         SectionCard(
           title: 'Result',

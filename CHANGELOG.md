@@ -3,6 +3,11 @@
 Multi-protocol inspection. Existing HTTP integrations and APIs keep working
 unchanged.
 
+- **Responsive inspector:** verified from 320 pt phones to 1440 px desktops,
+  in landscape, at 1.3× and 2× text and right-to-left. On narrow toolbars,
+  Timeline and Statistics move into the More menu. Detail and statistics
+  content stays within a readable 960 px column on wide screens. List rows,
+  JSON tree keys and the timeline adapt to large text instead of overflowing.
 - **Event model:** `NetworkLogEntry` gains `protocol`, `kind`, `direction`,
   `lifecycle`, `connectionId`, typed `details` (`ProtocolDetails`) and
   `metadata`, all optional with HTTP defaults. `NetworkLogBody` gains an open

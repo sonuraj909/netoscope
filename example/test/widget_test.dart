@@ -4,6 +4,8 @@ import 'package:netoscope/netoscope.dart';
 import 'package:netoscope_example/main.dart';
 
 void main() {
+  _responsive();
+
   testWidgets('sends a request and shows it in the inspector', (tester) async {
     await tester.pumpWidget(const NetoscopeExampleApp());
 
@@ -66,4 +68,35 @@ void main() {
     // Opened + 2 sent + 2 received + closed.
     expect(find.text('11 requests recorded'), findsOneWidget);
   });
+}
+
+void _responsive() {
+  const sizes = [
+    Size(320, 568),
+    Size(393, 852),
+    Size(852, 393),
+    Size(1180, 820),
+    Size(1440, 900),
+  ];
+  for (final size in sizes) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets('home screen fits ${size.width.toInt()}x'
+          '${size.height.toInt()} at text ×$scale', (tester) async {
+        tester.view
+          ..physicalSize = size * 2
+          ..devicePixelRatio = 2;
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.view.reset);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pumpWidget(const NetoscopeExampleApp());
+        await tester.pumpAndSettle();
+        for (var i = 0; i < 8; i++) {
+          await tester.drag(find.byType(ListView), const Offset(0, -500));
+          await tester.pumpAndSettle();
+        }
+        expect(find.byTooltip('Open inspector'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
 }

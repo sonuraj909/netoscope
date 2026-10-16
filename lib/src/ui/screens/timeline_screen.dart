@@ -178,7 +178,13 @@ class _TimelineScreenState extends State<TimelineScreen> {
             )
           : LayoutBuilder(
               builder: (context, constraints) {
-                final labelWidth = constraints.maxWidth >= 600 ? 220.0 : 128.0;
+                // Labels widen with the text size, but never take more than
+                // 40% of the screen from the bars.
+                final scale =
+                    MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.4);
+                final labelWidth =
+                    ((constraints.maxWidth >= 600 ? 220.0 : 128.0) * scale)
+                        .clamp(96.0, constraints.maxWidth * 0.4);
                 _availableWidth = constraints.maxWidth - labelWidth;
                 final pxPerMs = _pxPerMs ?? _fit();
                 final chartWidth = math.max(
@@ -198,6 +204,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
                                 alignment: Alignment.centerLeft,
                                 child: Text(
                                   'CALL',
+                                  textScaler: MediaQuery.textScalerOf(context)
+                                      .clamp(maxScaleFactor: 1.3),
                                   style: theme.textTheme.labelSmall?.copyWith(
                                     color: scheme.onSurfaceVariant,
                                     fontWeight: FontWeight.w700,
@@ -296,7 +304,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
                       ),
                     ),
                     const Divider(),
-                    const _Legend(),
+                    // The legend is reference text; capping its scale keeps it
+                    // from crowding out the chart on small phones.
+                    MediaQuery.withClampedTextScaling(
+                      maxScaleFactor: 1.3,
+                      child: const _Legend(),
+                    ),
                   ],
                 );
               },
@@ -508,6 +521,7 @@ class _RowLabel extends StatelessWidget {
             children: [
               Text(
                 badge.split(' ').first,
+                maxLines: 1,
                 style: codeTextStyle.copyWith(
                   fontSize: 10.5,
                   height: 1.2,
@@ -529,10 +543,15 @@ class _RowLabel extends StatelessWidget {
         ),
       ),
     );
-    return Material(
-      color:
-          banded ? theme.colorScheme.surfaceContainerLow : Colors.transparent,
-      child: row,
+    // Rows have a fixed height shared with the bar painter, so very large
+    // text is capped here to keep labels from clipping.
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.4,
+      child: Material(
+        color:
+            banded ? theme.colorScheme.surfaceContainerLow : Colors.transparent,
+        child: row,
+      ),
     );
   }
 }
@@ -573,7 +592,9 @@ class _Legend extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Text(label, style: theme.textTheme.labelSmall),
+                  Flexible(
+                    child: Text(label, style: theme.textTheme.labelSmall),
+                  ),
                 ],
               ),
           ],

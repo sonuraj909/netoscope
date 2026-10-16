@@ -559,12 +559,17 @@ class _StatusCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            Row(
-              children: [
-                const SizedBox(width: 34),
-                // The same history the inspector reads, observed live.
-                Expanded(
-                  child: StreamBuilder<List<NetworkLogEntry>>(
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: 34),
+              // Wraps the button below the count with large text on small
+              // phones.
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  // The same history the inspector reads, observed live.
+                  StreamBuilder<List<NetworkLogEntry>>(
                     stream: netoscope.logChanges,
                     initialData: netoscope.logs,
                     builder: (context, snapshot) => Text(
@@ -574,13 +579,13 @@ class _StatusCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                ),
-                TextButton.icon(
-                  onPressed: onOpenInspector,
-                  icon: const Icon(Icons.manage_search, size: 18),
-                  label: const Text('Inspect'),
-                ),
-              ],
+                  TextButton.icon(
+                    onPressed: onOpenInspector,
+                    icon: const Icon(Icons.manage_search, size: 18),
+                    label: const Text('Inspect'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

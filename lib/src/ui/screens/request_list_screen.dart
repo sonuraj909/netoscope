@@ -143,6 +143,9 @@ class _RequestListScreenState extends State<RequestListScreen> {
         await _share(har: true);
       case _MenuAction.clear:
         await _confirmClear();
+      case _MenuAction.timeline:
+      case _MenuAction.statistics:
+        break; // Handled where the visible entries are known.
     }
   }
 
@@ -282,6 +285,11 @@ class _RequestListScreenState extends State<RequestListScreen> {
       insights: _insights,
     );
     final canShare = widget.netoscope.exportHandler != null;
+    // On narrow phones, or with large text, Timeline and Statistics move into
+    // the overflow menu so the title stays readable.
+    final compact = MediaQuery.sizeOf(context).width /
+            MediaQuery.textScalerOf(context).scale(1) <
+        380;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: scheme.surface,
@@ -306,16 +314,18 @@ class _RequestListScreenState extends State<RequestListScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Timeline',
-            icon: const Icon(Icons.view_timeline_outlined),
-            onPressed: visible.isEmpty ? null : () => _openTimeline(visible),
-          ),
-          IconButton(
-            tooltip: 'Statistics',
-            icon: const Icon(Icons.insights_outlined),
-            onPressed: _openStatistics,
-          ),
+          if (!compact) ...[
+            IconButton(
+              tooltip: 'Timeline',
+              icon: const Icon(Icons.view_timeline_outlined),
+              onPressed: visible.isEmpty ? null : () => _openTimeline(visible),
+            ),
+            IconButton(
+              tooltip: 'Statistics',
+              icon: const Icon(Icons.insights_outlined),
+              onPressed: _openStatistics,
+            ),
+          ],
           IconButton(
             tooltip: 'Inspector settings',
             icon: const Icon(Icons.settings_outlined),
@@ -324,29 +334,53 @@ class _RequestListScreenState extends State<RequestListScreen> {
           PopupMenuButton<_MenuAction>(
             tooltip: 'More',
             icon: const Icon(Icons.more_vert),
-            enabled: _entries.isNotEmpty,
-            onSelected: _onMenu,
+            enabled: compact || _entries.isNotEmpty,
+            onSelected: (action) => switch (action) {
+              _MenuAction.timeline => _openTimeline(visible),
+              _MenuAction.statistics => _openStatistics(),
+              _ => _onMenu(action),
+            },
             itemBuilder: (context) => [
-              const PopupMenuItem(
+              if (compact) ...[
+                PopupMenuItem(
+                  value: _MenuAction.timeline,
+                  enabled: visible.isNotEmpty,
+                  child: const _MenuRow(
+                    Icons.view_timeline_outlined,
+                    'Timeline',
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: _MenuAction.statistics,
+                  child: _MenuRow(Icons.insights_outlined, 'Statistics'),
+                ),
+                const PopupMenuDivider(),
+              ],
+              PopupMenuItem(
+                enabled: _entries.isNotEmpty,
                 value: _MenuAction.copyJson,
                 child: _MenuRow(Icons.data_object, 'Copy all as JSON'),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
+                enabled: _entries.isNotEmpty,
                 value: _MenuAction.copyHar,
                 child: _MenuRow(Icons.description_outlined, 'Copy as HAR'),
               ),
               if (canShare) ...[
-                const PopupMenuItem(
+                PopupMenuItem(
+                  enabled: _entries.isNotEmpty,
                   value: _MenuAction.shareJson,
                   child: _MenuRow(Icons.ios_share, 'Share JSON…'),
                 ),
-                const PopupMenuItem(
+                PopupMenuItem(
+                  enabled: _entries.isNotEmpty,
                   value: _MenuAction.shareHar,
                   child: _MenuRow(Icons.ios_share, 'Share HAR…'),
                 ),
               ],
               const PopupMenuDivider(),
-              const PopupMenuItem(
+              PopupMenuItem(
+                enabled: _entries.isNotEmpty,
                 value: _MenuAction.clear,
                 child: _MenuRow(Icons.delete_sweep_outlined, 'Clear history'),
               ),
@@ -623,100 +657,138 @@ class _RequestRow extends StatelessWidget {
       onLongPress: () => showEntryActions(context, entry, mask: redactionMask),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: _StatusDot(color: outcome),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        badge,
-                        style: codeTextStyle.copyWith(
-                          fontSize: 12,
-                          height: 1.2,
-                          fontWeight: FontWeight.w700,
-                          color: methodColor(context, badge),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          entryTitle(entry),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w500,
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: _StatusDot(color: outcome),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth * 0.3,
+                          ),
+                          child: Text(
+                            badge,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.fade,
+                            style: codeTextStyle.copyWith(
+                              fontSize: 12,
+                              height: 1.2,
+                              fontWeight: FontWeight.w700,
+                              color: methodColor(context, badge),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    [
-                      entry.url.host,
-                      formatTime(entry.timestamp),
-                      for (final tag in entry.tags) '#$tag',
-                    ].join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: small,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isNPlusOne || isDuplicate) ...[
-                      LogBadge(
-                        label: isNPlusOne ? 'N+1' : 'DUP',
-                        color: warningColor(scheme),
-                        filled: true,
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    if (entry.hasGraphQLErrors) ...[
-                      LogBadge(
-                        label: 'GQL ERR',
-                        color: scheme.error,
-                        filled: true,
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    Text(
-                      entryStatus(entry),
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: statusColor,
-                        fontWeight: FontWeight.w700,
-                        fontFeatures: tabularFigures,
-                      ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            entryTitle(entry),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        // Findings sit on the second line so the trailing
+                        // status column stays narrow on small screens.
+                        if (isNPlusOne || isDuplicate || entry.hasGraphQLErrors)
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: constraints.maxWidth * 0.45,
+                            ),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (isNPlusOne || isDuplicate) ...[
+                                    LogBadge(
+                                      label: isNPlusOne ? 'N+1' : 'DUP',
+                                      color: warningColor(scheme),
+                                      filled: true,
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  if (entry.hasGraphQLErrors) ...[
+                                    LogBadge(
+                                      label: 'GQL ERR',
+                                      color: scheme.error,
+                                      filled: true,
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: Text(
+                            [
+                              entry.url.host,
+                              formatTime(entry.timestamp),
+                              for (final tag in entry.tags) '#$tag',
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: small,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  _measure,
-                  style: small?.copyWith(
-                    color: slow ? warningColor(scheme) : muted,
-                    fontWeight: slow ? FontWeight.w700 : null,
+              ),
+              const SizedBox(width: 12),
+              // With large text on a narrow phone the status would push the
+              // title out entirely, so it is capped and scaled down instead.
+              ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: constraints.maxWidth * 0.4),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.topEnd,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        entryStatus(entry),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: statusColor,
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: tabularFigures,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _measure,
+                        style: small?.copyWith(
+                          color: slow ? warningColor(scheme) : muted,
+                          fontWeight: slow ? FontWeight.w700 : null,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -783,7 +855,15 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-enum _MenuAction { copyJson, copyHar, shareJson, shareHar, clear }
+enum _MenuAction {
+  timeline,
+  statistics,
+  copyJson,
+  copyHar,
+  shareJson,
+  shareHar,
+  clear,
+}
 
 class _MenuRow extends StatelessWidget {
   const _MenuRow(this.icon, this.label);
@@ -796,7 +876,7 @@ class _MenuRow extends StatelessWidget {
         children: [
           Icon(icon, size: 18),
           const SizedBox(width: 12),
-          Text(label),
+          Flexible(child: Text(label)),
         ],
       );
 }

@@ -7,6 +7,7 @@ import '../../network_inspector.dart';
 import '../network_log_filter.dart';
 import '../theme/inspector_theme.dart';
 import '../widgets/log_formatting.dart';
+import '../widgets/readable_width.dart';
 import '../widgets/section_card.dart';
 
 /// Aggregate numbers, distributions and redundant-traffic findings for the
@@ -74,7 +75,7 @@ class StatisticsScreen extends StatelessWidget {
                   ),
                 )
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  padding: readablePadding(context, top: 8, bottom: 32),
                   children: [
                     _Tiles(stats: stats),
                     const SizedBox(height: 20),
