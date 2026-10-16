@@ -1,3 +1,8 @@
+## 0.2.2
+
+- README: a quick start and a guide for switching from other network loggers.
+- Clearer package description.
+
 ## 0.2.1
 
 - Adds screenshots to the pub.dev listing and the README.

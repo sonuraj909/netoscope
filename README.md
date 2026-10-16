@@ -1,6 +1,6 @@
 # Netoscope
 
-Debug-time network inspection for Flutter.
+A network logger and HTTP inspector for Flutter, for debug builds.
 
 Netoscope records what your app sends and receives over HTTP (through
 **Dio** or **`package:http`**). It also covers GraphQL, Server-Sent Events,
@@ -20,10 +20,29 @@ in-memory store, and an optional in-app inspector lets you browse it.
 > Logging is off in release builds by default. See
 > [Security considerations](#security-considerations).
 
+## Quick start
+
+```sh
+flutter pub add netoscope
+```
+
+```dart
+final netoscope = Netoscope();
+final dio = Dio()..interceptors.add(netoscope.dioInterceptor);
+
+// Anywhere below your Navigator:
+netoscope.openInspector(context);
+```
+
+That's it: every request, response and error is now in the inspector, with
+passwords, tokens and cookies redacted. Using `package:http` instead? Use
+`netoscope.httpClient()`. See [Inspector](#inspector) for a floating button.
+
 ## Contents
 
 - [What is supported](#what-is-supported)
 - [Installation](#installation)
+- [Switching from another network logger](#switching-from-another-network-logger)
 - [HTTP: Dio and package:http](#http-dio-and-packagehttp)
 - [Client compatibility](#client-compatibility)
 - [dart:io HttpClient](#dartio-httpclient)
@@ -91,6 +110,29 @@ import 'package:netoscope/netoscope.dart';
 Requires Dart `>=3.5.0 <4.0.0` and Flutter `>=3.24.0`. Netoscope depends on
 `dio` (`^5.4.0`) and `http` (`^1.5.0`), both pure Dart. It does **not**
 depend on any WebSocket, gRPC, MQTT or protobuf package.
+
+## Switching from another network logger
+
+If your app already uses a network logger or HTTP inspector such as Alice,
+`pretty_dio_logger` or a custom logging interceptor, moving to Netoscope is
+usually a two-line change:
+
+1. Replace the logger's Dio interceptor with `netoscope.dioInterceptor`, or
+   wrap your `http.Client` with `netoscope.httpClient(client)`.
+2. Replace the call that opened the old logger's screen with
+   `netoscope.openInspector(context)`, or add `NetworkInspectorOverlay` for a
+   floating button.
+
+Netoscope only observes traffic, so you can run it next to your current logger
+while you compare them, then remove the old one. What you get on top of
+request logging:
+
+- Redaction of secrets before anything is printed, stored, shown or exported.
+- GraphQL, WebSocket, SSE, gRPC, MQTT and webhook events in the same list.
+- Search syntax (`status:5xx method:POST duration:>500ms`), tags, a timeline,
+  statistics, and duplicate and N+1 detection.
+- cURL, JSON and HAR export, optional persisted history, a notification and
+  native Android/iOS capture.
 
 ## HTTP: Dio and package:http
 
