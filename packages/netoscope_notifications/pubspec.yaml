@@ -1,0 +1,24 @@
+name: netoscope_notifications
+description: >-
+  Local-notification support for Netoscope: shows recent network activity in
+  a quiet notification that opens the inspector when tapped.
+version: 0.1.0
+# Path dependency on netoscope until it is published; switch to a hosted
+# version constraint before publishing this package.
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_local_notifications: ^20.1.0
+  netoscope:
+    path: ../../
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter

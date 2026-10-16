@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../config/netoscope_settings.dart';
 import '../../network_inspector.dart';
 import '../network_inspector.dart';
 import '../payload/payload_viewer.dart';
@@ -45,6 +46,20 @@ class NetworkInspectorButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!netoscope.isInspectorAvailable) return const SizedBox.shrink();
+    return StreamBuilder<NetoscopeSettings>(
+      stream: netoscope.settingsChanges,
+      initialData: netoscope.settings,
+      builder: (context, _) => ValueListenableBuilder<int>(
+        valueListenable: openInspectorCount(netoscope),
+        builder: (context, open, _) =>
+            open > 0 || !netoscope.isFloatingButtonVisible
+                ? const SizedBox.shrink()
+                : _button(context),
+      ),
+    );
+  }
+
+  Widget _button(BuildContext context) {
     // No tooltip: this button may sit outside the Navigator's Overlay.
     return Semantics(
       button: true,

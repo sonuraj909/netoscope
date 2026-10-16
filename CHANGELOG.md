@@ -36,7 +36,32 @@ unchanged.
   - A GraphQL tab and connection event views.
   - Custom `PayloadViewer`s.
   - Background formatting and lazy rendering for large bodies.
-- **Config:** `payloadDecoders`, `detectGraphQL`, `webhooks`,
+- **Runtime switches:**
+  - `setLoggingEnabled`, `setFloatingButtonEnabled`, `setNotificationEnabled`
+    and `updateSettings`, plus `settings`, `settingsChanges` and `isRecording`.
+  - An inspector settings panel and a "Recording paused" banner.
+  - The switches are ignored when logging is disabled for the build.
+- **Activity notification:**
+  - The `NetworkActivityNotifier` contract, with `Netoscope(notifier:)`,
+    `attachNotifier` and a throttled `NetworkActivitySummary`.
+  - The companion package `netoscope_notifications` implements it with
+    `flutter_local_notifications`; tapping the notification opens the
+    inspector.
+- **Inspector helpers:** `openInspectorOn(navigator)` opens without a
+  `BuildContext`, and `isInspectorOpen` reports whether one is showing. The
+  floating button hides while the inspector is open.
+- **Copy as cURL:** from the detail screen or a long-press on a row. The
+  command is built from redacted data and says when values are masked.
+- **Inspector redesign:**
+  - Colored method and status pills, an outcome accent bar on each row and a
+    summary strip.
+  - A header card with stats and copy actions, and card-style sections.
+- **Payload views:** syntax-highlighted JSON, XML/HTML, GraphQL and forms
+  with line numbers and wrap, a collapsible JSON tree, and highlighted
+  redacted values.
+- **Console:** verbose output is framed and pretty-printed, with optional
+  ANSI colors (`consoleColors`).
+- **Config:** `consoleColors`, `payloadDecoders`, `detectGraphQL`, `webhooks`,
   `captureTransferProgress` and `captureRealtimeMessages`.
 - **Behavior changes:**
   - `signature` is now a sensitive-key fragment.

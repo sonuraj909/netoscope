@@ -19,6 +19,8 @@ in-memory store, and an optional in-app inspector lets you browse it.
 - [HTTP: Dio and package:http](#http-dio-and-packagehttp)
 - [Console-only setup](#console-only-setup)
 - [Inspector](#inspector)
+- [Runtime switches](#runtime-switches)
+- [Notification](#notification)
 - [Configuration](#configuration)
 - [Redaction](#redaction)
 - [Payload inspection and decoders](#payload-inspection-and-decoders)
@@ -126,6 +128,10 @@ SSE closed https://rt.example.com/feed (60123 ms)
 POST https://hooks.partner.dev/orders → 503 (201 ms) [webhook retryable]
 ```
 
+With `ConsoleLogLevel.verbose`, headers, pretty-printed bodies and protocol
+details are listed below each line. Set `consoleColors: true` to color
+statuses, methods and tags with ANSI codes, for consoles that render them.
+
 Output goes through `dart:developer`'s `log`, which appears in IDE debug
 consoles and DevTools. To send it somewhere else, such as `debugPrint`, use
 your own sink:
@@ -184,8 +190,19 @@ The inspector provides:
     Handshake tab for connections.
   - A GraphQL tab listing operations, variables and errors with their paths.
   - **View connection events**, which lists every event of a connection.
-- **Copy and export:** copy one event, or export the whole history, as JSON.
-  Clear the history after a confirmation.
+- **Copy and export:**
+  - Copy one call as **cURL** or JSON, from its detail screen or by
+    long-pressing its row.
+  - Export the whole history as JSON.
+  - Clear the history after a confirmation.
+- **Payload views:** JSON, XML/HTML, GraphQL and form bodies are
+  syntax-highlighted with line numbers and a wrap toggle. JSON can switch to a
+  collapsible **Tree** view. Redacted values are highlighted, so you can see
+  what was masked.
+
+cURL commands are built from the captured, already-redacted data. Masked
+values appear as `***`, and the confirmation says so; replace them before
+running the command. Binary, streamed and truncated bodies are left out.
 
 Large bodies are pretty-printed in a background isolate (on platforms other
 than web) and long bodies are rendered lazily, line by line. Bodies are
@@ -212,13 +229,79 @@ netoscope.openInspector(context, payloadViewers: const [CsvViewer()]);
 `NetworkInspector`, `NetworkInspectorButton` and `NetworkInspectorOverlay`
 accept the same `payloadViewers` parameter.
 
+## Runtime switches
+
+Recording, the floating button and the notification can be switched on and
+off while the app runs, from code or from the inspector's **settings** panel
+(the gear icon):
+
+```dart
+netoscope.setLoggingEnabled(false);        // pause capture; history is kept
+netoscope.setLoggingEnabled(true);         // resume
+netoscope.setFloatingButtonEnabled(false); // hide the floating button
+netoscope.setNotificationEnabled(true);    // show the activity notification
+
+netoscope.settings;          // NetoscopeSettings(recording, floatingButton, notification)
+netoscope.settingsChanges;   // Stream<NetoscopeSettings>
+netoscope.isRecording;       // false while paused
+```
+
+Initial values come from `NetworkLoggerConfig.showFloatingButton` and
+`showNotification`. While recording is paused, the inspector shows a
+**Recording paused · Resume** banner.
+
+These are runtime conveniences, not a security control. A logger that is
+disabled for the build (the release default) stays off, and these methods
+are ignored.
+
+## Notification
+
+Netoscope can show recent activity in a quiet notification. Tapping it
+opens the inspector, from anywhere in the app or from the background.
+
+The core package defines the `NetworkActivityNotifier` contract.
+Notifications need a native plugin, so a ready-made implementation lives in
+the companion package
+[`netoscope_notifications`](packages/netoscope_notifications), built on
+`flutter_local_notifications`. Apps that don't want notifications don't take
+on that plugin or its platform setup.
+
+```dart
+final navigatorKey = GlobalKey<NavigatorState>();
+final netoscope = Netoscope();
+
+// After WidgetsFlutterBinding.ensureInitialized(), for example in initState:
+await NetoscopeNotifications.attach(netoscope, navigatorKey: navigatorKey);
+```
+
+How the notification behaves:
+- **Content:** the request count, a status header ("All OK", "N failed",
+  "Paused") and a `✓/✕` line per recent call with method, status, path and
+  duration.
+- **Actions:** **Open**, **Pause/Resume** and **Clear**.
+- **Update rate:** at most one update per second
+  (`Netoscope(notificationInterval: …)`).
+- **Android:** an ongoing, silent notification in a low-importance channel.
+- **iOS/macOS:** a passive Notification Center entry with no banner or sound,
+  unless `showBanner: true`.
+- **Removal:** it is removed when notifications are switched off, the
+  history is cleared, or `netoscope.dispose()` is called.
+
+The companion package needs platform setup: Android core-library desugaring
+and an iOS `AppDelegate` line. See its README. To use a different
+notification mechanism, implement `NetworkActivityNotifier` and pass it to
+`Netoscope(notifier: …)` or `netoscope.attachNotifier(…)`.
+
 ## Configuration
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `enabled` | `null` | `null` logs in debug/profile and **not** in release. `true`/`false` force it. |
 | `consoleLogLevel` | `summary` | `none`, `summary` or `verbose` (adds headers, bodies and protocol details). |
+| `consoleColors` | `false` | ANSI colors in console output. |
 | `showInspector` | `true` | Whether the inspector, button and overlay are available. |
+| `showFloatingButton` | `true` | Initial state of the floating-button switch. |
+| `showNotification` | `true` | Initial state of the notification switch (when a notifier is attached). |
 | `maxHistorySize` | `100` | Events kept in memory; the oldest are evicted. |
 | `maxBodySize` | `32768` | Characters kept per body (also caps GraphQL documents and variables). `0` keeps only the format. |
 | `captureRequestBody` / `captureResponseBody` | `true` | Capture bodies (and outgoing/incoming message payloads). |

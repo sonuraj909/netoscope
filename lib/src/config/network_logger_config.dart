@@ -31,7 +31,10 @@ class NetworkLoggerConfig {
   const NetworkLoggerConfig({
     this.enabled,
     this.consoleLogLevel = ConsoleLogLevel.summary,
+    this.consoleColors = false,
     this.showInspector = true,
+    this.showFloatingButton = true,
+    this.showNotification = true,
     this.maxHistorySize = 100,
     this.maxBodySize = 32 * 1024,
     this.captureRequestBody = true,
@@ -58,6 +61,19 @@ class NetworkLoggerConfig {
 
   /// How much is written to the console for each call.
   final ConsoleLogLevel consoleLogLevel;
+
+  /// Whether console output uses ANSI colors. Leave off for consoles that
+  /// show escape codes literally.
+  final bool consoleColors;
+
+  /// Whether the floating inspector button starts visible. Can be changed
+  /// at runtime with `Netoscope.setFloatingButtonEnabled`.
+  final bool showFloatingButton;
+
+  /// Whether the activity notification starts on (when a notifier is
+  /// attached). Can be changed at runtime with
+  /// `Netoscope.setNotificationEnabled`.
+  final bool showNotification;
 
   /// Whether the in-app inspector and its button are available.
   final bool showInspector;

@@ -10,8 +10,11 @@ export 'src/adapters/realtime/grpc_call_recorder.dart' show GrpcCallRecorder;
 export 'src/adapters/realtime/mqtt_recorder.dart' show MqttRecorder;
 export 'src/adapters/realtime/sse_recorder.dart' show SseRecorder;
 export 'src/adapters/realtime/web_socket_recorder.dart' show WebSocketRecorder;
+export 'src/config/netoscope_settings.dart' show NetoscopeSettings;
 export 'src/config/network_logger_config.dart'
     show ConsoleLogLevel, NetworkLoggerConfig;
+export 'src/core/contracts/network_activity_notifier.dart'
+    show NetworkActivityNotifier, NetworkActivitySummary;
 export 'src/core/contracts/network_log_sink.dart' show NetworkLogSink;
 export 'src/core/contracts/network_log_store.dart' show NetworkLogStore;
 export 'src/core/contracts/payload_decoder.dart'

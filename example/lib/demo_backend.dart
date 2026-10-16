@@ -34,6 +34,15 @@ class DemoBackendAdapter implements HttpClientAdapter {
             },
           ],
         });
+      case '/search':
+        await _latency(const Duration(milliseconds: 120));
+        return _json({
+          'query': options.uri.queryParameters['q'],
+          'results': [
+            {'name': 'flutter', 'stars': 168000},
+            {'name': 'flutter_bloc', 'stars': 11800},
+          ],
+        });
       case '/hooks/orders':
         await _latency(const Duration(milliseconds: 200));
         return _json({'error': 'receiver unavailable'}, status: 503);
@@ -93,25 +102,24 @@ class DemoBackendAdapter implements HttpClientAdapter {
 /// An offline `package:http` client for the same demo backend, including a
 /// Server-Sent Events endpoint at `/events`.
 http.Client demoHttpClient() => MockClient.streaming((request, _) async {
-      if (request.url.path == '/events') {
-        return http.StreamedResponse(
-          _priceEvents(),
-          200,
-          headers: {'content-type': 'text/event-stream'},
-        );
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      return http.StreamedResponse(
-        Stream.value(
-          utf8.encode(
-            jsonEncode(
-                {'status': 'ok', 'region': 'eu-west', 'api_key': 'demo'}),
-          ),
-        ),
-        200,
-        headers: {'content-type': 'application/json'},
-      );
-    });
+  if (request.url.path == '/events') {
+    return http.StreamedResponse(
+      _priceEvents(),
+      200,
+      headers: {'content-type': 'text/event-stream'},
+    );
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 120));
+  return http.StreamedResponse(
+    Stream.value(
+      utf8.encode(
+        jsonEncode({'status': 'ok', 'region': 'eu-west', 'api_key': 'demo'}),
+      ),
+    ),
+    200,
+    headers: {'content-type': 'application/json'},
+  );
+});
 
 Stream<List<int>> _priceEvents() async* {
   for (var i = 1; i <= 3; i++) {

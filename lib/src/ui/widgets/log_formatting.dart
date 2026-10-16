@@ -58,8 +58,14 @@ String formatTime(DateTime time) {
 
 /// A compact colored label, used for methods and status codes.
 class LogBadge extends StatelessWidget {
-  /// Creates a badge.
-  const LogBadge({super.key, required this.label, required this.color});
+  /// Creates a badge. [filled] uses a tinted background instead of an
+  /// outline.
+  const LogBadge({
+    super.key,
+    required this.label,
+    required this.color,
+    this.filled = false,
+  });
 
   /// The text shown.
   final String label;
@@ -67,21 +73,26 @@ class LogBadge extends StatelessWidget {
   /// The accent color.
   final Color color;
 
+  /// Whether the badge has a tinted background.
+  final bool filled;
+
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        border: Border.all(color: color),
-        borderRadius: BorderRadius.circular(4),
+        color: filled ? color.withAlpha(40) : null,
+        border: filled ? null : Border.all(color: color),
+        borderRadius: BorderRadius.circular(filled ? 20 : 4),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: EdgeInsets.symmetric(horizontal: filled ? 8 : 6, vertical: 2),
         child: Text(
           label,
-          style: Theme.of(context)
-              .textTheme
-              .labelSmall
-              ?.copyWith(color: color, fontWeight: FontWeight.w700),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
         ),
       ),
     );

@@ -5,11 +5,17 @@ import 'package:flutter/services.dart';
 
 import '../../core/entities/network_log_body.dart';
 import '../../core/entities/payload_format.dart';
+import '../theme/inspector_theme.dart';
+import '../widgets/section_card.dart';
+import 'code_block.dart';
+import 'json_tree_view.dart';
 import 'payload_formatting.dart';
 import 'payload_viewer.dart';
+import 'syntax_highlighter.dart';
 
 /// The built-in viewers, tried after any custom ones.
 const List<PayloadViewer> builtInPayloadViewers = [
+  JsonPayloadViewer(),
   FormPayloadViewer(),
   MultipartPayloadViewer(),
   BinaryPayloadViewer(),
@@ -29,8 +35,31 @@ PayloadViewer viewerFor(NetworkLogBody body, List<PayloadViewer> custom) {
   return const TextPayloadViewer();
 }
 
-/// Shows JSON (pretty-printed), XML (indented), HTML and text. Long content
-/// is rendered lazily, line by line.
+/// The highlighting language for a body.
+SyntaxLanguage languageFor(NetworkLogBody body) {
+  if (body.kind == NetworkBodyKind.json) return SyntaxLanguage.json;
+  final format = body.format;
+  if (format == PayloadFormat.xml || format == PayloadFormat.html) {
+    return SyntaxLanguage.markup;
+  }
+  if (format == PayloadFormat.form) return SyntaxLanguage.form;
+  return SyntaxLanguage.plain;
+}
+
+/// JSON with a Pretty (highlighted) and a Tree (collapsible) view.
+class JsonPayloadViewer extends PayloadViewer {
+  /// Creates the viewer.
+  const JsonPayloadViewer();
+
+  @override
+  bool canView(NetworkLogBody body) => body.kind == NetworkBodyKind.json;
+
+  @override
+  Widget build(BuildContext context, NetworkLogBody body) =>
+      _JsonBody(body: body);
+}
+
+/// XML, HTML, form-encoded and plain text, highlighted where possible.
 class TextPayloadViewer extends PayloadViewer {
   /// Creates the viewer.
   const TextPayloadViewer();
@@ -40,10 +69,10 @@ class TextPayloadViewer extends PayloadViewer {
 
   @override
   Widget build(BuildContext context, NetworkLogBody body) =>
-      _FormattedText(body: body);
+      _FormattedCode(body: body);
 }
 
-/// Shows form-encoded bodies as a table.
+/// Form-encoded bodies as a table, with the raw text below.
 class FormPayloadViewer extends PayloadViewer {
   /// Creates the viewer.
   const FormPayloadViewer();
@@ -53,11 +82,17 @@ class FormPayloadViewer extends PayloadViewer {
       body.format == PayloadFormat.form && !body.isTruncated;
 
   @override
-  Widget build(BuildContext context, NetworkLogBody body) =>
-      _Table(rows: parseForm(body.content));
+  Widget build(BuildContext context, NetworkLogBody body) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          KeyValueTable(rows: parseForm(body.content), monospaceValues: true),
+          const SizedBox(height: 10),
+          _FormattedCode(body: body),
+        ],
+      );
 }
 
-/// Shows multipart fields and file metadata as tables.
+/// Multipart fields and file metadata as tables.
 class MultipartPayloadViewer extends PayloadViewer {
   /// Creates the viewer.
   const MultipartPayloadViewer();
@@ -72,15 +107,18 @@ class MultipartPayloadViewer extends PayloadViewer {
     try {
       parsed = jsonDecode(body.content);
     } on FormatException {
-      return const TextPayloadViewer().build(context, body);
+      return _FormattedCode(body: body);
     }
-    if (parsed is! Map) return const TextPayloadViewer().build(context, body);
+    if (parsed is! Map) return _FormattedCode(body: body);
     final fields = parsed['fields'];
     final files = parsed['files'];
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Table(
+        Text('Fields', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 6),
+        KeyValueTable(
           rows: [
             if (fields is List)
               for (final field in fields.whereType<Map<Object?, Object?>>())
@@ -89,9 +127,9 @@ class MultipartPayloadViewer extends PayloadViewer {
           emptyText: 'No fields.',
         ),
         const SizedBox(height: 12),
-        Text('Files', style: Theme.of(context).textTheme.labelLarge),
-        const SizedBox(height: 4),
-        _Table(
+        Text('Files', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 6),
+        KeyValueTable(
           rows: [
             if (files is List)
               for (final file in files.whereType<Map<Object?, Object?>>())
@@ -123,23 +161,31 @@ class BinaryPayloadViewer extends PayloadViewer {
   @override
   Widget build(BuildContext context, NetworkLogBody body) {
     final theme = Theme.of(context);
+    final icon = switch (body.kind) {
+      NetworkBodyKind.stream => Icons.stream,
+      NetworkBodyKind.unsupported => Icons.help_outline,
+      _ => Icons.memory_outlined,
+    };
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
+        color: SyntaxPalette.of(context).background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            Icon(
-              body.kind == NetworkBodyKind.stream
-                  ? Icons.stream
-                  : Icons.memory_outlined,
-              size: 20,
-            ),
+            Icon(icon, color: theme.colorScheme.primary),
             const SizedBox(width: 12),
-            Expanded(child: Text(body.content)),
+            Expanded(
+              child: Text(
+                body.content,
+                style: codeTextStyle.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -147,52 +193,94 @@ class BinaryPayloadViewer extends PayloadViewer {
   }
 }
 
-class _Table extends StatelessWidget {
-  const _Table({required this.rows, this.emptyText = 'Empty.'});
+enum _JsonMode { pretty, tree }
 
-  final List<MapEntry<String, String>> rows;
-  final String emptyText;
+/// JSON larger than this is not offered as a tree.
+const int _treeLimit = 256 * 1024;
+
+class _JsonBody extends StatefulWidget {
+  const _JsonBody({required this.body});
+
+  final NetworkLogBody body;
+
+  @override
+  State<_JsonBody> createState() => _JsonBodyState();
+}
+
+class _JsonBodyState extends State<_JsonBody> {
+  _JsonMode _mode = _JsonMode.pretty;
+  Object? _decoded;
+  bool _decodeFailed = false;
+
+  bool get _treeAvailable =>
+      !widget.body.isTruncated &&
+      widget.body.content.length <= _treeLimit &&
+      !_decodeFailed;
+
+  void _showTree() {
+    if (_decoded == null && !_decodeFailed) {
+      try {
+        _decoded = jsonDecode(widget.body.content);
+      } on FormatException {
+        _decodeFailed = true;
+      }
+    }
+    setState(() => _mode = _decodeFailed ? _JsonMode.pretty : _JsonMode.tree);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (rows.isEmpty) return Text(emptyText);
-    final keyStyle = Theme.of(context)
-        .textTheme
-        .bodySmall
-        ?.copyWith(fontWeight: FontWeight.w600);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final row in rows)
+        if (_treeAvailable)
           Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(row.key, style: keyStyle),
-                SelectableText(row.value),
-              ],
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<_JsonMode>(
+                showSelectedIcon: false,
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: const [
+                  ButtonSegment(
+                    value: _JsonMode.pretty,
+                    label: Text('Pretty'),
+                    icon: Icon(Icons.data_object, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: _JsonMode.tree,
+                    label: Text('Tree'),
+                    icon: Icon(Icons.account_tree_outlined, size: 16),
+                  ),
+                ],
+                selected: {_mode},
+                onSelectionChanged: (selection) =>
+                    selection.first == _JsonMode.tree
+                        ? _showTree()
+                        : setState(() => _mode = _JsonMode.pretty),
+              ),
             ),
           ),
+        if (_mode == _JsonMode.tree && _decoded != null)
+          JsonTreeView(value: _decoded)
+        else
+          _FormattedCode(body: widget.body),
       ],
     );
   }
 }
 
-/// Above this many lines, text is shown in a lazily built list instead of a
-/// single selectable text widget.
-const int _lazyLineThreshold = 300;
-
-class _FormattedText extends StatefulWidget {
-  const _FormattedText({required this.body});
+/// Formats a body (in the background when large) and shows it highlighted.
+class _FormattedCode extends StatefulWidget {
+  const _FormattedCode({required this.body});
 
   final NetworkLogBody body;
 
   @override
-  State<_FormattedText> createState() => _FormattedTextState();
+  State<_FormattedCode> createState() => _FormattedCodeState();
 }
 
-class _FormattedTextState extends State<_FormattedText> {
+class _FormattedCodeState extends State<_FormattedCode> {
   String? _text;
   Future<String>? _pending;
 
@@ -203,7 +291,7 @@ class _FormattedTextState extends State<_FormattedText> {
   }
 
   @override
-  void didUpdateWidget(_FormattedText oldWidget) {
+  void didUpdateWidget(_FormattedCode oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.body != widget.body) _prepare();
   }
@@ -231,46 +319,16 @@ class _FormattedTextState extends State<_FormattedText> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    const style = TextStyle(fontFamily: 'monospace', fontSize: 12);
     final text = _text;
-    final Widget child;
     if (text == null) {
-      child = const Center(
+      return const Center(
         child: Padding(
-          padding: EdgeInsets.all(16),
+          padding: EdgeInsets.all(24),
           child: CircularProgressIndicator(),
         ),
       );
-    } else {
-      final lines = const LineSplitter().convert(text);
-      child = lines.length <= _lazyLineThreshold
-          ? SelectableText(text, style: style)
-          : SizedBox(
-              height: MediaQuery.sizeOf(context).height * 0.6,
-              child: Scrollbar(
-                child: ListView.builder(
-                  key: const ValueKey('netoscope-lazy-body'),
-                  itemCount: lines.length,
-                  itemExtent: 16,
-                  itemBuilder: (context, index) => Text(
-                    lines[index],
-                    style: style,
-                    maxLines: 1,
-                    overflow: TextOverflow.fade,
-                    softWrap: false,
-                  ),
-                ),
-              ),
-            );
     }
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Padding(padding: const EdgeInsets.all(12), child: child),
-    );
+    return CodeBlock(text: text, language: languageFor(widget.body));
   }
 }
 
@@ -282,5 +340,9 @@ Future<void> copyWithConfirmation(
 ) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   await Clipboard.setData(ClipboardData(text: text));
-  messenger?.showSnackBar(SnackBar(content: Text(message)));
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
 }

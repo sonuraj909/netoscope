@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
 
 import '../../config/network_logger_config.dart';
@@ -14,13 +15,20 @@ import '../../core/entities/webhook_details.dart';
 /// By default output goes through `dart:developer`'s `log`, which appears in
 /// IDE debug consoles and DevTools. Pass [output] to redirect it, for example
 /// to Flutter's `debugPrint`.
+///
+/// Set [colors] to add ANSI colors (status by outcome, method, tags and
+/// section titles). Only enable it for consoles that render ANSI escapes.
 class ConsoleNetworkLogSink implements NetworkLogSink {
   /// Creates a console sink.
   ConsoleNetworkLogSink({
     this.level = ConsoleLogLevel.summary,
     this.slowRequestThreshold = const Duration(seconds: 3),
+    this.colors = false,
     void Function(String message)? output,
   }) : _output = output ?? _developerLog;
+
+  /// Whether ANSI color codes are added.
+  final bool colors;
 
   /// How much detail is written.
   final ConsoleLogLevel level;
@@ -44,37 +52,80 @@ class ConsoleNetworkLogSink implements NetworkLogSink {
     final buffer = StringBuffer(_summary(entry));
     final error = entry.error;
     if (error != null) {
-      buffer.write('\n  error: ${error.type.name}: ${error.message}');
+      buffer.write(
+        '\n  ${_paint('error: ${error.type.name}: ${error.message}', _red)}',
+      );
     }
     if (level == ConsoleLogLevel.verbose) {
-      _writeHeaders(buffer, 'request headers', entry.requestHeaders);
-      _writeBody(buffer, 'request body', entry.requestBody);
-      _writeHeaders(buffer, 'response headers', entry.responseHeaders);
-      _writeBody(buffer, 'response body', entry.responseBody);
-      for (final details in entry.details) {
-        _writeHeaders(buffer, details.label, details.describe());
+      final sections = <(String, List<String>)>[
+        if (entry.requestHeaders.isNotEmpty)
+          ('Request headers', _headerLines(entry.requestHeaders)),
+        if (entry.requestBody case final NetworkLogBody body)
+          ('Request body · ${body.format.label}', _bodyLines(body)),
+        if (entry.responseHeaders.isNotEmpty)
+          ('Response headers', _headerLines(entry.responseHeaders)),
+        if (entry.responseBody case final NetworkLogBody body)
+          ('Response body · ${body.format.label}', _bodyLines(body)),
+        for (final details in entry.details)
+          (details.label, _headerLines(details.describe())),
+      ];
+      for (final (index, (title, lines)) in sections.indexed) {
+        buffer.write('\n  ${index == 0 ? '┌' : '├'}─ ${_paint(title, _bold)}');
+        for (final line in lines) {
+          buffer.write('\n  │  $line');
+        }
       }
+      if (sections.isNotEmpty) buffer.write('\n  └─');
     }
     return buffer.toString();
   }
 
+  static const _reset = '\x1B[0m';
+  static const _bold = '\x1B[1m';
+  static const _red = '\x1B[31m';
+  static const _green = '\x1B[32m';
+  static const _yellow = '\x1B[33m';
+  static const _cyan = '\x1B[36m';
+  static const _magenta = '\x1B[35m';
+
+  String _paint(String text, String code) =>
+      colors ? '$code$text$_reset' : text;
+
+  String _statusColor(NetworkLogEntry entry) => switch (entry.outcome) {
+        NetworkLogOutcome.success => _green,
+        NetworkLogOutcome.httpError =>
+          (entry.statusCode ?? 0) >= 500 ? _red : _yellow,
+        NetworkLogOutcome.failure => _red,
+        NetworkLogOutcome.cancelled => _magenta,
+      };
+
   String _summary(NetworkLogEntry entry) {
     final duration = entry.duration;
     final time = duration == null ? '' : ' (${duration.inMilliseconds} ms)';
+    final method = _paint(entry.method, _bold);
+    final tags = _tags(entry);
+    final paintedTags = tags.isEmpty ? '' : _paint(tags, _cyan);
     switch (entry.kind) {
       case NetworkEventKind.message:
         final arrow = entry.direction == MessageDirection.outgoing ? '↑' : '↓';
         final body = entry.messageBody;
         final what = body == null ? '' : ' (${body.format.label})';
-        return '${entry.method} $arrow ${entry.url}$what${_tags(entry)}';
+        return '$method $arrow ${entry.url}$what$paintedTags';
       case NetworkEventKind.connection:
-        final stage = entry.lifecycle?.name ?? 'event';
-        return '${entry.method} $stage ${entry.url}$time${_tags(entry)}';
+        final stage = _paint(
+          entry.lifecycle?.name ?? 'event',
+          _statusColor(entry),
+        );
+        return '$method $stage ${entry.url}$time$paintedTags';
       case NetworkEventKind.exchange:
-        final status =
-            entry.statusCode?.toString() ?? entry.outcome.name.toUpperCase();
-        final slow = entry.isSlower(slowRequestThreshold) ? ' [SLOW]' : '';
-        return '${entry.method} ${entry.url} → $status$time$slow${_tags(entry)}';
+        final status = _paint(
+          entry.statusCode?.toString() ?? entry.outcome.name.toUpperCase(),
+          _statusColor(entry),
+        );
+        final slow = entry.isSlower(slowRequestThreshold)
+            ? _paint(' [SLOW]', _yellow)
+            : '';
+        return '$method ${entry.url} → $status$time$slow$paintedTags';
     }
   }
 
@@ -96,22 +147,23 @@ class ConsoleNetworkLogSink implements NetworkLogSink {
     return tags.isEmpty ? '' : ' [${tags.join('; ')}]';
   }
 
-  static void _writeHeaders(
-    StringBuffer buffer,
-    String label,
-    Map<String, String> headers,
-  ) {
-    if (headers.isEmpty) return;
-    buffer.write('\n  $label:');
-    for (final header in headers.entries) {
-      buffer.write('\n    ${header.key}: ${header.value}');
-    }
-  }
+  List<String> _headerLines(Map<String, String> headers) => [
+        for (final header in headers.entries)
+          '${_paint(header.key, _cyan)}: ${header.value}',
+      ];
 
-  static void _writeBody(
-      StringBuffer buffer, String label, NetworkLogBody? body) {
-    if (body == null) return;
-    final suffix = body.isTruncated ? ' …(truncated)' : '';
-    buffer.write('\n  $label (${body.kind.name}): ${body.content}$suffix');
+  static List<String> _bodyLines(NetworkLogBody body) {
+    var text = body.content;
+    if (body.kind == NetworkBodyKind.json && !body.isTruncated) {
+      try {
+        text = const JsonEncoder.withIndent('  ').convert(jsonDecode(text));
+      } on FormatException {
+        // Keep the captured text.
+      }
+    }
+    return [
+      ...const LineSplitter().convert(text),
+      if (body.isTruncated) '…(truncated)',
+    ];
   }
 }

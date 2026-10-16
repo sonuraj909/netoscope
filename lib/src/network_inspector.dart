@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 
@@ -10,7 +12,9 @@ import 'adapters/realtime/mqtt_recorder.dart';
 import 'adapters/realtime/sse_recorder.dart';
 import 'adapters/realtime/web_socket_recorder.dart';
 import 'adapters/webhook_importer.dart';
+import 'config/netoscope_settings.dart';
 import 'config/network_logger_config.dart';
+import 'core/contracts/network_activity_notifier.dart';
 import 'core/contracts/network_log_sink.dart';
 import 'core/contracts/network_log_store.dart';
 import 'core/entities/network_event_kind.dart';
@@ -20,6 +24,7 @@ import 'core/usecases/clear_network_logs.dart';
 import 'core/usecases/get_network_logs.dart';
 import 'core/usecases/record_network_log.dart';
 import 'data/export/network_log_json_exporter.dart';
+import 'data/notifications/activity_notification_controller.dart';
 import 'data/sinks/console_network_log_sink.dart';
 import 'data/storage/in_memory_network_log_store.dart';
 import 'protocols/webhook/webhook_delivery_record.dart';
@@ -45,10 +50,15 @@ class Netoscope {
   /// [NetworkLoggerConfig.consoleLogLevel] is [ConsoleLogLevel.none]. Pass
   /// [store] to supply your own history, and [sinks] to forward entries
   /// elsewhere.
+  ///
+  /// Pass [notifier] (or call [attachNotifier] later) to show activity in a
+  /// notification, updated at most once per [notificationInterval].
   factory Netoscope({
     NetworkLoggerConfig config = const NetworkLoggerConfig(),
     NetworkLogStore? store,
     Iterable<NetworkLogSink> sinks = const [],
+    NetworkActivityNotifier? notifier,
+    Duration notificationInterval = const Duration(seconds: 1),
   }) {
     final ownedStore = store == null
         ? InMemoryNetworkLogStore(maxEntries: config.maxHistorySize)
@@ -61,11 +71,13 @@ class Netoscope {
         if (config.consoleLogLevel != ConsoleLogLevel.none)
           ConsoleNetworkLogSink(
             level: config.consoleLogLevel,
+            colors: config.consoleColors,
             slowRequestThreshold: config.slowRequestThreshold,
           ),
         ...sinks,
       ],
-    );
+      notificationInterval,
+    )..attachNotifier(notifier);
   }
 
   Netoscope._(
@@ -73,7 +85,12 @@ class Netoscope {
     NetworkLogStore store,
     this._ownedStore,
     List<NetworkLogSink> sinks,
-  )   : _getLogs = GetNetworkLogs(store),
+    this.notificationInterval,
+  )   : _settings = NetoscopeSettings(
+          floatingButton: config.showFloatingButton,
+          notification: config.showNotification,
+        ),
+        _getLogs = GetNetworkLogs(store),
         _clearLogs = ClearNetworkLogs(store),
         _capture = LogCapture(
           config: config,
@@ -95,12 +112,90 @@ class Netoscope {
   final GetNetworkLogs _getLogs;
   final ClearNetworkLogs _clearLogs;
   final LogCapture _capture;
+  final StreamController<NetoscopeSettings> _settingsChanges =
+      StreamController.broadcast();
+  NetoscopeSettings _settings;
+  ActivityNotificationController? _notifications;
+  StreamSubscription<List<NetworkLogEntry>>? _historySubscription;
 
-  /// Whether calls are being recorded in the current build mode.
+  /// The minimum time between notification updates.
+  final Duration notificationInterval;
+
+  /// Whether logging is enabled for this build (see
+  /// [NetworkLoggerConfig.enabled]). When `false`, nothing can be switched on
+  /// at runtime.
   bool get isEnabled => config.isEnabled;
 
   /// Whether the inspector UI should be offered.
   bool get isInspectorAvailable => isEnabled && config.showInspector;
+
+  /// The current runtime switches.
+  NetoscopeSettings get settings => _settings;
+
+  /// Emits the settings whenever a switch changes or a notifier is attached.
+  Stream<NetoscopeSettings> get settingsChanges => _settingsChanges.stream;
+
+  /// Whether new activity is being recorded right now.
+  bool get isRecording => isEnabled && _settings.recording;
+
+  /// Whether the floating inspector button should be shown.
+  bool get isFloatingButtonVisible =>
+      isInspectorAvailable && _settings.floatingButton;
+
+  /// Whether a notifier is attached.
+  bool get hasNotifier => _notifications != null;
+
+  /// Whether the activity notification is currently on.
+  bool get isNotificationActive => _notifications?.isActive ?? false;
+
+  /// Pauses (`false`) or resumes (`true`) recording. History is kept.
+  void setLoggingEnabled(bool enabled) =>
+      updateSettings(_settings.copyWith(recording: enabled));
+
+  /// Shows or hides the floating inspector button.
+  void setFloatingButtonEnabled(bool enabled) =>
+      updateSettings(_settings.copyWith(floatingButton: enabled));
+
+  /// Shows or hides the activity notification (needs a notifier).
+  void setNotificationEnabled(bool enabled) =>
+      updateSettings(_settings.copyWith(notification: enabled));
+
+  /// Replaces all runtime switches at once. Ignored when logging is
+  /// disabled for this build.
+  void updateSettings(NetoscopeSettings settings) {
+    if (!isEnabled || settings == _settings) return;
+    final recordingChanged = settings.recording != _settings.recording;
+    _settings = settings;
+    _capture.recording = settings.recording;
+    _syncNotification();
+    if (recordingChanged) _notifications?.refresh();
+    _settingsChanges.add(settings);
+  }
+
+  /// Attaches (or, with `null`, detaches) the notifier that shows activity
+  /// outside the app UI. Ignored when logging is disabled for this build.
+  void attachNotifier(NetworkActivityNotifier? notifier) {
+    unawaited(_historySubscription?.cancel());
+    _historySubscription = null;
+    _notifications?.dispose();
+    _notifications = null;
+    if (notifier != null && isEnabled) {
+      final controller = ActivityNotificationController(
+        notifier: notifier,
+        entries: () => logs,
+        isRecording: () => isRecording,
+        interval: notificationInterval,
+      );
+      _notifications = controller;
+      _historySubscription =
+          logChanges.listen((_) => controller.onHistoryChanged());
+      _syncNotification();
+    }
+    if (!_settingsChanges.isClosed) _settingsChanges.add(_settings);
+  }
+
+  void _syncNotification() =>
+      _notifications?.setActive(isEnabled && _settings.notification);
 
   /// Recorded calls, newest first.
   List<NetworkLogEntry> get logs => _getLogs();
@@ -227,7 +322,13 @@ class Netoscope {
     WebhookImporter(_capture).import(records);
   }
 
-  /// Releases the history created by this instance. A store passed to the
-  /// constructor is left untouched.
-  Future<void> dispose() async => _ownedStore?.dispose();
+  /// Removes the notification, closes the settings stream and releases the
+  /// history created by this instance. A store passed to the constructor is
+  /// left untouched.
+  Future<void> dispose() async {
+    await _historySubscription?.cancel();
+    _notifications?.dispose();
+    await _settingsChanges.close();
+    await _ownedStore?.dispose();
+  }
 }

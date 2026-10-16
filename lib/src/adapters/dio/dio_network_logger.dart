@@ -39,7 +39,7 @@ class DioNetworkLogger extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    if (_capture.config.isEnabled) {
+    if (_capture.isRecording) {
       final timing = _Timing(_capture.nextId());
       _timings[options] = timing;
       if (_capture.config.captureTransferProgress) {

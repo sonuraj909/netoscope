@@ -233,6 +233,13 @@ void main() {
       await tester.tap(find.byType(FloatingActionButton));
       await tester.pumpAndSettle();
       expect(find.byType(NetworkInspector), findsOneWidget);
+      // The floating button hides while the inspector is open…
+      expect(find.byType(FloatingActionButton), findsNothing);
+
+      // …and comes back when it closes.
+      navigatorKey.currentState!.pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(FloatingActionButton), findsOneWidget);
     });
   });
 }

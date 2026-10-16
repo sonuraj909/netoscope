@@ -42,6 +42,9 @@ void main() {
 
     Future<void> run(String label) async {
       await tester.scrollUntilVisible(find.text(label), 200);
+      // Move the row clear of the floating inspector button.
+      await tester.drag(find.byType(ListView), const Offset(0, -250));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(label));
       // The demo streams mix fake and real asynchrony; advance both.
       for (var i = 0; i < 30; i++) {

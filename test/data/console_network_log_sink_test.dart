@@ -55,7 +55,25 @@ void main() {
     ConsoleNetworkLogSink(level: ConsoleLogLevel.verbose, output: lines.add)
         .write(entry);
 
-    expect(lines.single, contains('authorization: ***'));
-    expect(lines.single, contains('request body (json): {"password":"***"}'));
+    expect(
+      lines.single,
+      'POST https://api.example.com/login → 200 (4000 ms) [SLOW]\n'
+      '  ┌─ Request headers\n'
+      '  │  authorization: ***\n'
+      '  ├─ Request body · JSON\n'
+      '  │  {\n'
+      '  │    "password": "***"\n'
+      '  │  }\n'
+      '  └─',
+    );
+  });
+
+  test('colors are opt-in ANSI codes', () {
+    final lines = <String>[];
+    ConsoleNetworkLogSink(colors: true, output: lines.add).write(entry);
+
+    expect(lines.single, contains('\x1B[1mPOST\x1B[0m'));
+    expect(lines.single, contains('\x1B[32m200\x1B[0m'));
+    expect(lines.single, contains('\x1B[33m [SLOW]\x1B[0m'));
   });
 }

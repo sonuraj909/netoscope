@@ -58,8 +58,14 @@ class LogCapture {
   late final WebhookInspector _webhooks;
   int _sequence = 0;
 
+  /// Runtime pause switch. Nothing is recorded while this is `false`.
+  bool recording = true;
+
+  /// Whether new activity is recorded at all right now.
+  bool get isRecording => config.isEnabled && recording;
+
   /// Whether a call to [url] should be recorded.
-  bool shouldLog(Uri url) => config.isEnabled && !config.isExcluded(url);
+  bool shouldLog(Uri url) => isRecording && !config.isExcluded(url);
 
   /// A new identifier, unique within this capture policy.
   String nextId() =>
@@ -182,6 +188,7 @@ class LogCapture {
   /// Builds and records an entry, swallowing any failure inside the logger.
   /// When [build] returns `null` nothing is recorded.
   void record(NetworkLogEntry? Function() build) {
+    if (!isRecording) return;
     try {
       final entry = build();
       if (entry != null) _record(entry);
