@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:netoscope/netoscope.dart';
 import 'package:netoscope_example/main.dart';
@@ -34,5 +35,32 @@ void main() {
     expect(find.textContaining('hunter2'), findsNothing);
     expect(find.textContaining('ada@example.com'), findsNothing);
     expect(find.textContaining('"password": "***"'), findsOneWidget);
+  });
+
+  testWidgets('records SSE events and WebSocket messages', (tester) async {
+    await tester.pumpWidget(const NetoscopeExampleApp());
+
+    Future<void> run(String label) async {
+      await tester.scrollUntilVisible(find.text(label), 200);
+      await tester.tap(find.text(label));
+      // The demo streams mix fake and real asynchrony; advance both.
+      for (var i = 0; i < 30; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.drag(find.byType(ListView), const Offset(0, 3000));
+      await tester.pumpAndSettle();
+      expect(find.text('$label: done'), findsOneWidget);
+    }
+
+    await run('SSE stream (3 events)');
+    // Connected + 3 events + closed.
+    expect(find.text('5 requests recorded'), findsOneWidget);
+
+    await run('WebSocket echo (simulated)');
+    // Opened + 2 sent + 2 received + closed.
+    expect(find.text('11 requests recorded'), findsOneWidget);
   });
 }

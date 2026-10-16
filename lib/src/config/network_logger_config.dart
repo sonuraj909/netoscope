@@ -1,3 +1,6 @@
+import '../core/contracts/payload_decoder.dart';
+import '../protocols/webhook/webhook_config.dart';
+
 /// How much of each call is written to the console.
 enum ConsoleLogLevel {
   /// Nothing is written.
@@ -38,6 +41,11 @@ class NetworkLoggerConfig {
     this.slowRequestThreshold = const Duration(seconds: 3),
     this.sensitiveKeys = const {},
     this.redactionMask = '***',
+    this.payloadDecoders = const [],
+    this.detectGraphQL = true,
+    this.webhooks = const WebhookConfig(),
+    this.captureTransferProgress = true,
+    this.captureRealtimeMessages = true,
   })  : assert(maxHistorySize > 0, 'maxHistorySize must be positive'),
         assert(maxBodySize >= 0, 'maxBodySize must not be negative');
 
@@ -85,6 +93,26 @@ class NetworkLoggerConfig {
 
   /// The text that replaces redacted values.
   final String redactionMask;
+
+  /// Custom payload decoders (for example a [PayloadDecoder] for Protocol
+  /// Buffers or MessagePack), tried in order before built-in handling.
+  final List<PayloadDecoder> payloadDecoders;
+
+  /// Whether GraphQL operations and errors are recognized in HTTP calls.
+  final bool detectGraphQL;
+
+  /// How outbound webhook deliveries are recognized.
+  final WebhookConfig webhooks;
+
+  /// Whether Dio upload/download progress is recorded for requests that
+  /// already have `onSendProgress`/`onReceiveProgress` callbacks.
+  final bool captureTransferProgress;
+
+  /// Whether individual WebSocket, SSE, gRPC-stream and MQTT messages are
+  /// recorded. Connection lifecycle events are always recorded. Chatty
+  /// connections evict older history, so consider turning this off or
+  /// filtering messages per connection.
+  final bool captureRealtimeMessages;
 
   /// Whether logging is active for the current build mode.
   bool get isEnabled =>

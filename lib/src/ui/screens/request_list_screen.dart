@@ -3,19 +3,37 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_entry.dart';
 import '../../network_inspector.dart';
 import '../network_log_filter.dart';
+import '../payload/payload_viewer.dart';
+import '../widgets/filter_sheet.dart';
 import '../widgets/log_formatting.dart';
 import 'request_detail_screen.dart';
 
-/// Lists recorded calls with search, filters, export and clearing.
+/// Lists recorded events with search, filters, export and clearing.
 class RequestListScreen extends StatefulWidget {
   /// Creates the list for [netoscope]'s history.
-  const RequestListScreen({super.key, required this.netoscope});
+  const RequestListScreen({
+    super.key,
+    required this.netoscope,
+    this.initialFilter = const NetworkLogFilter(),
+    this.payloadViewers = const [],
+    this.title = 'Network inspector',
+  });
 
   /// The logger whose history is shown.
   final Netoscope netoscope;
+
+  /// The filter applied when the screen opens.
+  final NetworkLogFilter initialFilter;
+
+  /// Custom payload viewers, consulted before the built-in ones.
+  final List<PayloadViewer> payloadViewers;
+
+  /// The app bar title.
+  final String title;
 
   @override
   State<RequestListScreen> createState() => _RequestListScreenState();
@@ -25,13 +43,14 @@ class _RequestListScreenState extends State<RequestListScreen> {
   final TextEditingController _search = TextEditingController();
   late List<NetworkLogEntry> _entries;
   StreamSubscription<List<NetworkLogEntry>>? _subscription;
-  NetworkLogFilter _filter = const NetworkLogFilter();
+  late NetworkLogFilter _filter = widget.initialFilter;
 
   Duration get _slowThreshold => widget.netoscope.config.slowRequestThreshold;
 
   @override
   void initState() {
     super.initState();
+    _search.text = _filter.query;
     _listen();
   }
 
@@ -90,12 +109,34 @@ class _RequestListScreenState extends State<RequestListScreen> {
     if (confirmed ?? false) widget.netoscope.clearLogs();
   }
 
+  Future<void> _openFilters() => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (_) => FilterSheet(
+          filter: _filter,
+          entries: _entries,
+          onUpdate: _updateFilter,
+        ),
+      );
+
+  void _showConnection(String connectionId) => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => RequestListScreen(
+            netoscope: widget.netoscope,
+            payloadViewers: widget.payloadViewers,
+            title: 'Connection events',
+            initialFilter: NetworkLogFilter(connectionId: connectionId),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final visible = _filter.apply(_entries, slowThreshold: _slowThreshold);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Network inspector'),
+        title: Text(widget.title),
         actions: [
           IconButton(
             tooltip: 'Copy all as JSON',
@@ -116,7 +157,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
             child: TextField(
               controller: _search,
               decoration: InputDecoration(
-                hintText: 'Search URL or endpoint',
+                hintText: 'Search URL, operation, event or topic',
                 prefixIcon: const Icon(Icons.search),
                 isDense: true,
                 border: const OutlineInputBorder(),
@@ -139,6 +180,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
             filter: _filter,
             methods: {for (final e in _entries) e.method}.toList()..sort(),
             onUpdate: _updateFilter,
+            onOpenFilters: _openFilters,
           ),
           const Divider(height: 1),
           Expanded(
@@ -150,6 +192,9 @@ class _RequestListScreenState extends State<RequestListScreen> {
                     itemBuilder: (context, index) => _RequestTile(
                       entry: visible[index],
                       slowThreshold: _slowThreshold,
+                      payloadViewers: widget.payloadViewers,
+                      onShowConnection:
+                          _filter.connectionId == null ? _showConnection : null,
                     ),
                   ),
           ),
@@ -164,20 +209,37 @@ class _FilterBar extends StatelessWidget {
     required this.filter,
     required this.methods,
     required this.onUpdate,
+    required this.onOpenFilters,
   });
 
   final NetworkLogFilter filter;
   final List<String> methods;
   final void Function(NetworkLogFilter Function(NetworkLogFilter)) onUpdate;
+  final VoidCallback onOpenFilters;
 
   @override
   Widget build(BuildContext context) {
+    final sheetCount = FilterSheet.activeCount(filter);
     return SizedBox(
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         children: [
+          ActionChip(
+            avatar: const Icon(Icons.tune, size: 16),
+            label: Text(sheetCount == 0 ? 'Filters' : 'Filters ($sheetCount)'),
+            onPressed: onOpenFilters,
+          ),
+          const _ChipGap(),
+          if (filter.connectionId != null) ...[
+            InputChip(
+              label: const Text('This connection'),
+              onDeleted: () =>
+                  onUpdate((f) => f.copyWith(clearConnection: true)),
+            ),
+            const _ChipGap(),
+          ],
           FilterChip(
             label: const Text('Slow'),
             avatar: const Icon(Icons.speed, size: 16),
@@ -219,27 +281,47 @@ class _ChipGap extends StatelessWidget {
 }
 
 class _RequestTile extends StatelessWidget {
-  const _RequestTile({required this.entry, required this.slowThreshold});
+  const _RequestTile({
+    required this.entry,
+    required this.slowThreshold,
+    required this.payloadViewers,
+    required this.onShowConnection,
+  });
 
   final NetworkLogEntry entry;
   final Duration slowThreshold;
+  final List<PayloadViewer> payloadViewers;
+  final void Function(String connectionId)? onShowConnection;
+
+  String get _measure {
+    if (entry.kind != NetworkEventKind.message) {
+      return formatDuration(entry.duration);
+    }
+    final size = entry.direction == MessageDirection.outgoing
+        ? entry.requestSize
+        : entry.responseSize;
+    return formatBytes(size);
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = outcomeColor(entry, scheme);
-    final path = entry.url.path.isEmpty ? '/' : entry.url.path;
     final slow = entry.isSlower(slowThreshold);
     return ListTile(
       key: ValueKey(entry.id),
       leading: SizedBox(
-        width: 64,
+        width: 72,
         child: Align(
           alignment: Alignment.centerLeft,
-          child: LogBadge(label: entry.method, color: scheme.primary),
+          child: LogBadge(label: entryBadge(entry), color: scheme.primary),
         ),
       ),
-      title: Text(path, maxLines: 2, overflow: TextOverflow.ellipsis),
+      title: Text(
+        entryTitle(entry),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: Text(
         '${entry.url.host} · ${formatTime(entry.timestamp)}',
         maxLines: 1,
@@ -249,10 +331,19 @@ class _RequestTile extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          LogBadge(label: statusLabel(entry), color: color),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (entry.hasGraphQLErrors) ...[
+                LogBadge(label: 'GQL ERR', color: scheme.error),
+                const SizedBox(width: 4),
+              ],
+              LogBadge(label: entryStatus(entry), color: color),
+            ],
+          ),
           const SizedBox(height: 4),
           Text(
-            formatDuration(entry.duration),
+            _measure,
             style: TextStyle(
               fontSize: 12,
               color: slow ? warningColor(scheme) : null,
@@ -266,6 +357,8 @@ class _RequestTile extends StatelessWidget {
           builder: (_) => RequestDetailScreen(
             entry: entry,
             slowThreshold: slowThreshold,
+            payloadViewers: payloadViewers,
+            onShowConnection: onShowConnection,
           ),
         ),
       ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_entry.dart';
+import '../../core/entities/protocol_details.dart';
 
 bool _isDark(ColorScheme scheme) => scheme.brightness == Brightness.dark;
 
@@ -83,5 +85,57 @@ class LogBadge extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The leading badge text: the HTTP method, or a protocol label with a
+/// direction arrow or lifecycle stage.
+String entryBadge(NetworkLogEntry entry) {
+  switch (entry.kind) {
+    case NetworkEventKind.exchange:
+      return entry.protocol == NetworkProtocol.grpc
+          ? (entry.detail<GrpcDetails>()?.label ?? 'gRPC')
+          : entry.method;
+    case NetworkEventKind.message:
+      final arrow = entry.direction == MessageDirection.outgoing ? '↑' : '↓';
+      return '${entry.method} $arrow';
+    case NetworkEventKind.connection:
+      final stage = switch (entry.lifecycle) {
+        ConnectionLifecycle.opened => 'open',
+        ConnectionLifecycle.closed => 'close',
+        ConnectionLifecycle.failed => 'fail',
+        null => '',
+      };
+      return '${entry.method} $stage'.trim();
+  }
+}
+
+/// The row title: the path, or the most meaningful protocol label.
+String entryTitle(NetworkLogEntry entry) {
+  final path = entry.url.path.isEmpty ? '/' : entry.url.path;
+  final graphQL = entry.graphQL;
+  if (graphQL != null && graphQL.operations.isNotEmpty) {
+    return '$path · ${graphQL.summary}';
+  }
+  final sse = entry.detail<SseDetails>();
+  if (sse != null) return 'event: ${sse.eventType}';
+  final topic = entry.detail<MqttDetails>()?.topic;
+  if (topic != null) {
+    final packet = entry.metadata['packet'];
+    return packet == null ? topic : '$packet $topic';
+  }
+  return path;
+}
+
+/// The trailing status text.
+String entryStatus(NetworkLogEntry entry) {
+  switch (entry.kind) {
+    case NetworkEventKind.exchange:
+      final grpcStatus = entry.detail<GrpcDetails>()?.statusName;
+      return grpcStatus ?? statusLabel(entry);
+    case NetworkEventKind.message:
+      return entry.messageBody?.format.label.toUpperCase() ?? 'MESSAGE';
+    case NetworkEventKind.connection:
+      return entry.lifecycle?.name.toUpperCase() ?? 'EVENT';
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../network_inspector.dart';
 import '../network_inspector.dart';
+import '../payload/payload_viewer.dart';
 
 /// A small floating button that opens the [NetworkInspector].
 ///
@@ -17,6 +18,7 @@ class NetworkInspectorButton extends StatelessWidget {
     super.key,
     required this.netoscope,
     this.navigatorKey,
+    this.payloadViewers = const [],
   });
 
   /// The logger whose inspector is opened.
@@ -26,12 +28,17 @@ class NetworkInspectorButton extends StatelessWidget {
   /// [Navigator] ancestor.
   final GlobalKey<NavigatorState>? navigatorKey;
 
+  /// Custom payload viewers passed to the inspector.
+  final List<PayloadViewer> payloadViewers;
+
   void _open(BuildContext context) {
     final navigator = navigatorKey?.currentState;
     if (navigator != null) {
-      navigator.push(NetworkInspector.route(netoscope));
+      navigator.push(
+        NetworkInspector.route(netoscope, payloadViewers: payloadViewers),
+      );
     } else {
-      netoscope.openInspector(context);
+      netoscope.openInspector(context, payloadViewers: payloadViewers);
     }
   }
 
@@ -73,6 +80,7 @@ class NetworkInspectorOverlay extends StatelessWidget {
     required this.navigatorKey,
     required this.child,
     this.alignment = AlignmentDirectional.bottomStart,
+    this.payloadViewers = const [],
   });
 
   /// The logger whose inspector is opened.
@@ -86,6 +94,9 @@ class NetworkInspectorOverlay extends StatelessWidget {
 
   /// The app content.
   final Widget child;
+
+  /// Custom payload viewers passed to the inspector.
+  final List<PayloadViewer> payloadViewers;
 
   @override
   Widget build(BuildContext context) {
@@ -102,6 +113,7 @@ class NetworkInspectorOverlay extends StatelessWidget {
                 child: NetworkInspectorButton(
                   netoscope: netoscope,
                   navigatorKey: navigatorKey,
+                  payloadViewers: payloadViewers,
                 ),
               ),
             ),

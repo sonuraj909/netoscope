@@ -1,75 +1,121 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import '../../core/entities/graphql_details.dart';
+import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_body.dart';
 import '../../core/entities/network_log_entry.dart';
+import '../payload/built_in_viewers.dart';
+import '../payload/payload_viewer.dart';
 import '../widgets/log_formatting.dart';
 
-/// Shows everything captured for a single call.
+/// Shows everything captured for a single event.
 class RequestDetailScreen extends StatelessWidget {
   /// Creates the detail view for [entry].
   const RequestDetailScreen({
     super.key,
     required this.entry,
     this.slowThreshold = const Duration(seconds: 3),
+    this.payloadViewers = const [],
+    this.onShowConnection,
   });
 
-  /// The call shown.
+  /// The event shown.
   final NetworkLogEntry entry;
 
-  /// Calls at least this slow are flagged.
+  /// Exchanges at least this slow are flagged.
   final Duration slowThreshold;
 
-  Future<void> _copy(BuildContext context) async {
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    final json = const JsonEncoder.withIndent('  ').convert(entry.toJson());
-    await Clipboard.setData(ClipboardData(text: json));
-    messenger?.showSnackBar(
-      const SnackBar(content: Text('Request details copied')),
-    );
+  /// Custom payload viewers, consulted before the built-in ones.
+  final List<PayloadViewer> payloadViewers;
+
+  /// Opens the list of events of a connection, when available.
+  final void Function(String connectionId)? onShowConnection;
+
+  List<(String, Widget)> _tabs() {
+    final graphQL = entry.graphQL;
+    return [
+      ('Overview', _OverviewTab(entry: entry, slowThreshold: slowThreshold)),
+      ...switch (entry.kind) {
+        NetworkEventKind.message => [
+            (
+              'Payload',
+              _PayloadTab(
+                headers: const {},
+                body: entry.messageBody,
+                emptyBodyText: 'No payload captured.',
+                viewers: payloadViewers,
+                showHeaders: false,
+              ),
+            ),
+          ],
+        NetworkEventKind.connection => [
+            (
+              'Handshake',
+              _HandshakeTab(entry: entry),
+            ),
+          ],
+        NetworkEventKind.exchange => [
+            (
+              'Request',
+              _PayloadTab(
+                headers: entry.requestHeaders,
+                body: entry.requestBody,
+                emptyBodyText: 'No request body captured.',
+                viewers: payloadViewers,
+              ),
+            ),
+            (
+              'Response',
+              entry.hasResponse || entry.responseBody != null
+                  ? _PayloadTab(
+                      headers: entry.responseHeaders,
+                      body: entry.responseBody,
+                      emptyBodyText: 'No response body captured.',
+                      viewers: payloadViewers,
+                    )
+                  : const Center(child: Text('No response was received.')),
+            ),
+          ],
+      },
+      if (graphQL != null) ('GraphQL', _GraphQLTab(details: graphQL)),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
+    final tabs = _tabs();
+    final connectionId = entry.connectionId;
+    final showConnection = onShowConnection;
     return DefaultTabController(
-      length: 3,
+      length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
-          title: Text('${entry.method} ${statusLabel(entry)}'),
+          title: Text('${entryBadge(entry)} ${entryStatus(entry)}'),
           actions: [
+            if (connectionId != null && showConnection != null)
+              IconButton(
+                tooltip: 'View connection events',
+                icon: const Icon(Icons.timeline),
+                onPressed: () => showConnection(connectionId),
+              ),
             IconButton(
               tooltip: 'Copy details as JSON',
               icon: const Icon(Icons.copy),
-              onPressed: () => _copy(context),
+              onPressed: () => copyWithConfirmation(
+                context,
+                const JsonEncoder.withIndent('  ').convert(entry.toJson()),
+                'Request details copied',
+              ),
             ),
           ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Overview'),
-              Tab(text: 'Request'),
-              Tab(text: 'Response'),
-            ],
+          bottom: TabBar(
+            isScrollable: tabs.length > 3,
+            tabs: [for (final (label, _) in tabs) Tab(text: label)],
           ),
         ),
-        body: TabBarView(
-          children: [
-            _OverviewTab(entry: entry, slowThreshold: slowThreshold),
-            _PayloadTab(
-              headers: entry.requestHeaders,
-              body: entry.requestBody,
-              emptyBodyText: 'No request body captured.',
-            ),
-            entry.hasResponse
-                ? _PayloadTab(
-                    headers: entry.responseHeaders,
-                    body: entry.responseBody,
-                    emptyBodyText: 'No response body captured.',
-                  )
-                : const Center(child: Text('No response was received.')),
-          ],
-        ),
+        body: TabBarView(children: [for (final (_, view) in tabs) view]),
       ),
     );
   }
@@ -85,34 +131,79 @@ class _OverviewTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final error = entry.error;
     final slow = entry.isSlower(slowThreshold) ? ' (slow)' : '';
+    final isMessage = entry.kind == NetworkEventKind.message;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _KeyValueSection(
+        KeyValueSection(
           title: 'General',
           values: {
             'URL': entry.url.toString(),
+            if (entry.protocol != NetworkProtocol.http)
+              'Protocol': entry.protocol.label,
             'Method': entry.method,
-            'Status': statusLabel(entry),
+            if (entry.kind != NetworkEventKind.exchange)
+              'Event': entry.kind.name,
+            if (entry.direction != null)
+              'Direction': entry.direction == MessageDirection.outgoing
+                  ? 'sent ↑'
+                  : 'received ↓',
+            if (entry.lifecycle != null) 'Lifecycle': entry.lifecycle!.name,
+            'Status': entryStatus(entry),
             'Outcome': entry.outcome.name,
-            'Duration': '${formatDuration(entry.duration)}$slow',
-            'Started': entry.timestamp.toLocal().toIso8601String(),
-            'Request size': formatBytes(entry.requestSize),
-            'Response size': formatBytes(entry.responseSize),
+            if (!isMessage)
+              'Duration': '${formatDuration(entry.duration)}$slow',
+            'Time': entry.timestamp.toLocal().toIso8601String(),
+            if (!isMessage || entry.requestSize != null)
+              'Request size': formatBytes(entry.requestSize),
+            if (!isMessage || entry.responseSize != null)
+              'Response size': formatBytes(entry.responseSize),
+            if (entry.connectionId != null) 'Connection': entry.connectionId!,
           },
         ),
         if (error != null)
-          _KeyValueSection(
+          KeyValueSection(
             title: 'Error',
             values: {'Type': error.type.name, 'Message': error.message},
           ),
-        _KeyValueSection(
-          title: 'Query parameters',
-          values: {
-            for (final param in entry.queryParameters.entries)
-              param.key: param.value.join(', '),
-          },
-          emptyText: 'No query parameters.',
+        for (final details in entry.details)
+          if (details is! GraphQLDetails)
+            KeyValueSection(title: details.label, values: details.describe()),
+        if (entry.metadata.isNotEmpty)
+          KeyValueSection(title: 'Metadata', values: entry.metadata),
+        if (entry.kind == NetworkEventKind.exchange)
+          KeyValueSection(
+            title: 'Query parameters',
+            values: {
+              for (final param in entry.queryParameters.entries)
+                param.key: param.value.join(', '),
+            },
+            emptyText: 'No query parameters.',
+          ),
+      ],
+    );
+  }
+}
+
+class _HandshakeTab extends StatelessWidget {
+  const _HandshakeTab({required this.entry});
+
+  final NetworkLogEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        KeyValueSection(
+          title: 'Request headers',
+          values: entry.requestHeaders,
+          emptyText: 'No headers captured.',
+        ),
+        KeyValueSection(
+          title: 'Response headers',
+          values: entry.responseHeaders,
+          emptyText: 'No headers captured.',
         ),
       ],
     );
@@ -124,32 +215,141 @@ class _PayloadTab extends StatelessWidget {
     required this.headers,
     required this.body,
     required this.emptyBodyText,
+    required this.viewers,
+    this.showHeaders = true,
   });
 
   final Map<String, String> headers;
   final NetworkLogBody? body;
   final String emptyBodyText;
+  final List<PayloadViewer> viewers;
+  final bool showHeaders;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _KeyValueSection(
-          title: 'Headers',
-          values: headers,
-          emptyText: 'No headers captured.',
-        ),
-        _BodyView(body: body, emptyText: emptyBodyText),
+        if (showHeaders)
+          KeyValueSection(
+            title: 'Headers',
+            values: headers,
+            emptyText: 'No headers captured.',
+          ),
+        _BodyView(body: body, emptyText: emptyBodyText, viewers: viewers),
       ],
     );
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text, {this.trailing});
+class _GraphQLTab extends StatelessWidget {
+  const _GraphQLTab({required this.details});
+
+  final GraphQLDetails details;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasData = details.hasData;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        KeyValueSection(
+          title: 'Result',
+          values: {
+            'Operations': '${details.operations.length}'
+                '${details.isBatch ? ' (batch)' : ''}',
+            'Errors': '${details.errors.length}',
+            'Data': hasData == null
+                ? 'response not captured'
+                : hasData
+                    ? (details.isPartial ? 'partial (with errors)' : 'present')
+                    : 'none',
+          },
+        ),
+        for (final (index, op) in details.operations.indexed) ...[
+          SectionTitle(
+            details.isBatch
+                ? '#$index ${op.type.name} ${op.name ?? ''}'
+                : '${op.type.name} ${op.name ?? '(anonymous)'}',
+          ),
+          if (op.persistedQueryHash != null)
+            Text('Persisted query: ${op.persistedQueryHash}'),
+          if (op.document != null) _Code(op.document!),
+          if (op.variables != null) ...[
+            const SizedBox(height: 8),
+            Text('Variables', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 4),
+            _Code(_prettyJson(op.variables!)),
+          ],
+          const SizedBox(height: 8),
+        ],
+        if (details.errors.isNotEmpty) const SectionTitle('Errors'),
+        for (final error in details.errors)
+          Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    error.message,
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                  if (error.path.isNotEmpty) Text('Path: ${error.pathLabel}'),
+                  if (error.code != null) Text('Code: ${error.code}'),
+                  if (error.operationIndex != null)
+                    Text('Operation: #${error.operationIndex}'),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  static String _prettyJson(String json) {
+    try {
+      return const JsonEncoder.withIndent('  ').convert(jsonDecode(json));
+    } on FormatException {
+      return json;
+    }
+  }
+}
+
+class _Code extends StatelessWidget {
+  const _Code(this.text);
 
   final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: SelectableText(
+          text,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        ),
+      ),
+    );
+  }
+}
+
+/// A section heading with an optional trailing action.
+class SectionTitle extends StatelessWidget {
+  /// Creates a heading.
+  const SectionTitle(this.text, {super.key, this.trailing});
+
+  /// The heading text.
+  final String text;
+
+  /// An optional trailing widget.
   final Widget? trailing;
 
   @override
@@ -168,15 +368,23 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-class _KeyValueSection extends StatelessWidget {
-  const _KeyValueSection({
+/// A titled list of selectable key/value pairs.
+class KeyValueSection extends StatelessWidget {
+  /// Creates a section.
+  const KeyValueSection({
+    super.key,
     required this.title,
     required this.values,
     this.emptyText = '–',
   });
 
+  /// The section title.
   final String title;
+
+  /// The pairs shown.
   final Map<String, String> values;
+
+  /// Shown when [values] is empty.
   final String emptyText;
 
   @override
@@ -188,7 +396,7 @@ class _KeyValueSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SectionTitle(title),
+        SectionTitle(title),
         if (values.isEmpty) Text(emptyText),
         for (final entry in values.entries)
           Padding(
@@ -208,22 +416,15 @@ class _KeyValueSection extends StatelessWidget {
 }
 
 class _BodyView extends StatelessWidget {
-  const _BodyView({required this.body, required this.emptyText});
+  const _BodyView({
+    required this.body,
+    required this.emptyText,
+    required this.viewers,
+  });
 
   final NetworkLogBody? body;
   final String emptyText;
-
-  static String _pretty(NetworkLogBody body) {
-    if (body.kind != NetworkBodyKind.json || body.isTruncated) {
-      return body.content;
-    }
-    try {
-      return const JsonEncoder.withIndent('  ')
-          .convert(jsonDecode(body.content));
-    } on FormatException {
-      return body.content;
-    }
-  }
+  final List<PayloadViewer> viewers;
 
   @override
   Widget build(BuildContext context) {
@@ -231,22 +432,28 @@ class _BodyView extends StatelessWidget {
     if (body == null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [const _SectionTitle('Body'), Text(emptyText)],
+        children: [const SectionTitle('Body'), Text(emptyText)],
       );
     }
-    final text = _pretty(body);
     final theme = Theme.of(context);
+    final type = body.contentType;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SectionTitle(
-          'Body (${body.kind.name})',
+        SectionTitle(
+          'Body (${body.format.label})',
           trailing: IconButton(
             tooltip: 'Copy body',
             icon: const Icon(Icons.copy, size: 18),
-            onPressed: () => Clipboard.setData(ClipboardData(text: text)),
+            onPressed: () =>
+                copyWithConfirmation(context, body.content, 'Body copied'),
           ),
         ),
+        if (type != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(type, style: theme.textTheme.bodySmall),
+          ),
         if (body.isTruncated)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -256,19 +463,7 @@ class _BodyView extends StatelessWidget {
                   ?.copyWith(color: warningColor(theme.colorScheme)),
             ),
           ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: SelectableText(
-              text,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
-          ),
-        ),
+        viewerFor(body, viewers).build(context, body),
       ],
     );
   }

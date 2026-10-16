@@ -20,6 +20,23 @@ class DemoBackendAdapter implements HttpClientAdapter {
   ) async {
     final path = options.uri.path;
     switch (path) {
+      case '/graphql':
+        await _latency(const Duration(milliseconds: 150));
+        return _json({
+          'data': {
+            'viewer': {'id': '1', 'name': 'Ada Lovelace', 'email': null},
+          },
+          'errors': [
+            {
+              'message': 'Not authorized to read email',
+              'path': ['viewer', 'email'],
+              'extensions': {'code': 'FORBIDDEN'},
+            },
+          ],
+        });
+      case '/hooks/orders':
+        await _latency(const Duration(milliseconds: 200));
+        return _json({'error': 'receiver unavailable'}, status: 503);
       case '/users':
         await _latency(const Duration(milliseconds: 180));
         return _json([
@@ -73,12 +90,65 @@ class DemoBackendAdapter implements HttpClientAdapter {
       );
 }
 
-/// An offline `package:http` client for the same demo backend.
-http.Client demoHttpClient() => MockClient((request) async {
+/// An offline `package:http` client for the same demo backend, including a
+/// Server-Sent Events endpoint at `/events`.
+http.Client demoHttpClient() => MockClient.streaming((request, _) async {
+      if (request.url.path == '/events') {
+        return http.StreamedResponse(
+          _priceEvents(),
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      }
       await Future<void>.delayed(const Duration(milliseconds: 120));
-      return http.Response(
-        jsonEncode({'status': 'ok', 'region': 'eu-west', 'api_key': 'demo'}),
+      return http.StreamedResponse(
+        Stream.value(
+          utf8.encode(
+            jsonEncode(
+                {'status': 'ok', 'region': 'eu-west', 'api_key': 'demo'}),
+          ),
+        ),
         200,
         headers: {'content-type': 'application/json'},
       );
     });
+
+Stream<List<int>> _priceEvents() async* {
+  for (var i = 1; i <= 3; i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    yield utf8.encode(
+      'event: price\nid: $i\ndata: {"symbol":"NETO","price":${100 + i}}\n\n',
+    );
+  }
+}
+
+/// A simulated WebSocket that echoes every message back, standing in for a
+/// `WebSocketChannel` (which has the same `stream`/`sink` shape).
+class DemoEchoSocket {
+  final _incoming = StreamController<String>();
+  final _outgoing = StreamController<String>();
+
+  /// The close code reported once the socket is closed.
+  int? closeCode;
+
+  /// Messages from the "server".
+  Stream<String> get stream => _incoming.stream;
+
+  /// Messages to the "server".
+  StreamSink<String> get sink => _outgoing.sink;
+
+  /// Starts echoing.
+  DemoEchoSocket() {
+    _outgoing.stream.listen((message) async {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!_incoming.isClosed) _incoming.add('echo: $message');
+    });
+  }
+
+  /// Closes both directions with a normal close code.
+  Future<void> close() async {
+    closeCode = 1000;
+    await _outgoing.close();
+    await _incoming.close();
+  }
+}

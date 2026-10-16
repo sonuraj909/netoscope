@@ -2,8 +2,12 @@ import 'dart:developer' as developer;
 
 import '../../config/network_logger_config.dart';
 import '../../core/contracts/network_log_sink.dart';
+import '../../core/entities/graphql_details.dart';
+import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_body.dart';
 import '../../core/entities/network_log_entry.dart';
+import '../../core/entities/protocol_details.dart';
+import '../../core/entities/webhook_details.dart';
 
 /// Writes already-redacted entries to the developer console.
 ///
@@ -47,17 +51,49 @@ class ConsoleNetworkLogSink implements NetworkLogSink {
       _writeBody(buffer, 'request body', entry.requestBody);
       _writeHeaders(buffer, 'response headers', entry.responseHeaders);
       _writeBody(buffer, 'response body', entry.responseBody);
+      for (final details in entry.details) {
+        _writeHeaders(buffer, details.label, details.describe());
+      }
     }
     return buffer.toString();
   }
 
   String _summary(NetworkLogEntry entry) {
-    final status =
-        entry.statusCode?.toString() ?? entry.outcome.name.toUpperCase();
     final duration = entry.duration;
     final time = duration == null ? '' : ' (${duration.inMilliseconds} ms)';
-    final slow = entry.isSlower(slowRequestThreshold) ? ' [SLOW]' : '';
-    return '${entry.method} ${entry.url} → $status$time$slow';
+    switch (entry.kind) {
+      case NetworkEventKind.message:
+        final arrow = entry.direction == MessageDirection.outgoing ? '↑' : '↓';
+        final body = entry.messageBody;
+        final what = body == null ? '' : ' (${body.format.label})';
+        return '${entry.method} $arrow ${entry.url}$what${_tags(entry)}';
+      case NetworkEventKind.connection:
+        final stage = entry.lifecycle?.name ?? 'event';
+        return '${entry.method} $stage ${entry.url}$time${_tags(entry)}';
+      case NetworkEventKind.exchange:
+        final status =
+            entry.statusCode?.toString() ?? entry.outcome.name.toUpperCase();
+        final slow = entry.isSlower(slowRequestThreshold) ? ' [SLOW]' : '';
+        return '${entry.method} ${entry.url} → $status$time$slow${_tags(entry)}';
+    }
+  }
+
+  static String _tags(NetworkLogEntry entry) {
+    final tags = <String>[
+      for (final details in entry.details)
+        switch (details) {
+          GraphQLDetails(:final summary, :final errors) => errors.isEmpty
+              ? 'GraphQL $summary'
+              : 'GraphQL $summary, ${errors.length} errors',
+          GrpcDetails(:final statusName) =>
+            statusName == null ? 'gRPC' : 'gRPC $statusName',
+          WebhookDetails(:final outcome) => 'webhook ${outcome.name}',
+          SseDetails(:final eventType) => 'event: $eventType',
+          MqttDetails(:final topic) when topic != null => 'topic: $topic',
+          _ => '',
+        },
+    ]..removeWhere((tag) => tag.isEmpty);
+    return tags.isEmpty ? '' : ' [${tags.join('; ')}]';
   }
 
   static void _writeHeaders(

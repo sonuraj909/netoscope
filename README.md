@@ -1,38 +1,63 @@
 # Netoscope
 
-Debug-time network logging and inspection for Flutter.
+Debug-time network inspection for Flutter.
 
-Netoscope records the HTTP calls your app makes through **Dio** or
-**`package:http`**, redacts secrets before anything is printed or stored,
-keeps a bounded history in memory and, if you want it, shows that history in
-an in-app inspector.
+Netoscope records what your app sends and receives over HTTP (through
+**Dio** or **`package:http`**). It also covers GraphQL, Server-Sent Events,
+WebSockets, gRPC(-Web), MQTT and webhooks. Secrets are redacted before
+anything is printed, stored, shown or exported. History is kept in a bounded
+in-memory store, and an optional in-app inspector lets you browse it.
 
 > **Netoscope is a debugging aid, not a production observability tool.**
 > Logging is off in release builds by default. See
 > [Security considerations](#security-considerations).
 
-## Features
+## Contents
 
-- Dio interceptor and `package:http` client wrapper, both feeding one history
-- Method, URL, query parameters, headers, bodies, status, duration, sizes and errors
-- Distinguishes successes, HTTP errors, timeouts, connection failures and cancellations
-- Redaction of authorization headers, cookies, tokens, passwords, OTPs, API
-  keys, nested JSON fields and URL query parameters, plus your own keys
-- Safe handling of JSON, text, form, multipart, binary and streamed bodies,
-  with truncation
-- Bounded in-memory history, newest first, with a change stream
-- URL exclusions and a per-request opt-out
-- Console output through `dart:developer` (no `print`)
-- JSON export of the whole history or a single call
-- Optional inspector with search, method/status/slow filters, details and copy
-- Optional floating button to open the inspector from anywhere
+- [What is supported](#what-is-supported)
+- [Installation](#installation)
+- [HTTP: Dio and package:http](#http-dio-and-packagehttp)
+- [Console-only setup](#console-only-setup)
+- [Inspector](#inspector)
+- [Configuration](#configuration)
+- [Redaction](#redaction)
+- [Payload inspection and decoders](#payload-inspection-and-decoders)
+- [GraphQL](#graphql)
+- [Real-time protocols](#real-time-protocols)
+- [Webhooks](#webhooks)
+- [Event model](#event-model)
+- [Architecture](#architecture)
+- [Example](#example) · [Testing](#testing) · [Limitations](#limitations) ·
+  [Security considerations](#security-considerations)
 
-## Requirements
+## What is supported
 
-- Dart `>=3.5.0 <4.0.0`
-- Flutter `>=3.24.0`
-- Dio `^5.4.0` and/or `package:http` `^1.5.0` (both are dependencies of
-  Netoscope; use whichever your app needs)
+"Automatic" means Netoscope observes the traffic itself once you attach it.
+"Recorder" means Netoscope has no dependency on that protocol's client
+library: you call a small recording API from your client's callbacks or
+streams.
+
+| Protocol | How | Notes |
+| --- | --- | --- |
+| HTTP via Dio | Automatic (`netoscope.dioInterceptor`) | Includes upload/download progress when the app sets progress callbacks |
+| HTTP via `package:http` | Automatic (`netoscope.httpClient()`) | |
+| GraphQL over HTTP | Automatic, through either HTTP integration | Operations, variables, errors, partial data, batches, persisted queries, multipart uploads |
+| GraphQL over WebSocket | Automatic, with `WebSocketRecorder` | `graphql-transport-ws` and `subscriptions-transport-ws` messages |
+| Server-Sent Events | Automatic with `netoscope.httpClient()`; recorder for other clients | Events are recorded as they arrive; the stream is not buffered |
+| WebSocket | Recorder (`netoscope.webSocket`) wrapping any `Stream`/`StreamSink` | Works with `web_socket_channel` or `dart:io` `WebSocket` without depending on them |
+| gRPC-Web (binary) | Automatic, through either HTTP integration | Service, method, status and message counts from frames and trailers |
+| gRPC (native, `package:grpc`) | Recorder (`netoscope.grpcCall`) | Call it from a `ClientInterceptor`; see the [recipe](#grpc) |
+| MQTT | Recorder (`netoscope.mqtt`) | Call it from your MQTT client's callbacks |
+| Outbound webhooks | Automatic for configured endpoints or tagged Dio requests | Attempt, outcome, retryability; signatures are never stored |
+| Incoming / backend webhooks | Import (`netoscope.importWebhookDeliveries`) | A Flutter app cannot see server-to-server traffic |
+| Protocol Buffers payloads | Decoder you supply (`ProtobufPayloadDecoder`) | Without a schema, protobuf is shown as binary |
+| Other protocols | Recorder (`netoscope.connection`) | |
+
+**Not supported:**
+- Native gRPC over Dio or `package:http`. Those clients cannot expose HTTP/2 trailers.
+- Decompressing gRPC messages.
+- Decoding `application/grpc-web-text` (base64).
+- Observing sockets that the app does not route through a recorder.
 
 ## Installation
 
@@ -44,11 +69,13 @@ flutter pub add netoscope
 import 'package:netoscope/netoscope.dart';
 ```
 
-## Quick start
+Requires Dart `>=3.5.0 <4.0.0` and Flutter `>=3.24.0`. Netoscope depends on
+`dio` (`^5.4.0`) and `http` (`^1.5.0`), both pure Dart. It does **not**
+depend on any WebSocket, gRPC, MQTT or protobuf package.
 
-Create **one** `Netoscope` for the app and attach it to your clients.
+## HTTP: Dio and package:http
 
-### Dio
+Create **one** `Netoscope` for the app and attach it to your clients:
 
 ```dart
 final netoscope = Netoscope();
@@ -56,35 +83,31 @@ final netoscope = Netoscope();
 final dio = Dio()
   // Add Netoscope last so it sees headers added by other interceptors.
   ..interceptors.add(netoscope.dioInterceptor);
+
+final client = netoscope.httpClient();              // wraps http.Client()
+final custom = netoscope.httpClient(myRetryClient); // or wraps your client
 ```
 
-The interceptor only observes: requests, responses and errors are passed on
-unchanged, and `DioException`s still reach your code.
+Both integrations only observe. Requests, responses and errors are passed on
+unchanged; `DioException`s and `package:http` exceptions still reach your code.
+Response streams are read only as your code reads them.
 
-To keep a single request out of the logs:
+To keep a single Dio request out of the logs:
 
 ```dart
 dio.get('/metrics', options: Options(extra: {Netoscope.skipLoggingKey: true}));
 ```
 
-### package:http
+**Transfer progress (Dio):** if a request already has `onSendProgress` or
+`onReceiveProgress`, Netoscope records how far the upload or download got.
+This includes cancelled downloads. Your callback still runs first, with the
+same arguments. No callback is added to requests that have none. Turn this off
+with `captureTransferProgress: false`.
 
-```dart
-final netoscope = Netoscope();
+## Console-only setup
 
-final client = netoscope.httpClient();               // wraps http.Client()
-final custom = netoscope.httpClient(myRetryClient);  // or wraps your client
-
-final response = await client.get(Uri.parse('https://api.example.com/users'));
-```
-
-The wrapper observes the response body as you read it, so nothing is consumed
-on your behalf. See [Limitations](#limitations).
-
-### Console-only setup
-
-The inspector is optional. Without it, Netoscope simply writes one line per
-call to the debug console:
+The inspector is optional. Without it, Netoscope writes one line per event to
+the debug console:
 
 ```dart
 final netoscope = Netoscope(
@@ -96,15 +119,16 @@ final netoscope = Netoscope(
 ```
 
 ```
-POST https://api.example.com/auth/login → 200 (243 ms)
+POST https://api.example.com/graphql → 200 (120 ms) [GraphQL query Viewer, 1 errors]
 GET https://api.example.com/reports → 200 (3412 ms) [SLOW]
-GET https://api.example.com/flaky → FAILURE (402 ms)
-  error: timeout: The request took longer than the receive timeout.
+WS ↓ wss://rt.example.com/socket (JSON)
+SSE closed https://rt.example.com/feed (60123 ms)
+POST https://hooks.partner.dev/orders → 503 (201 ms) [webhook retryable]
 ```
 
-Output uses `dart:developer`'s `log`, which shows in IDE debug consoles and
-DevTools. To use another output, such as `debugPrint`, turn the built-in sink
-off and add your own:
+Output goes through `dart:developer`'s `log`, which appears in IDE debug
+consoles and DevTools. To send it somewhere else, such as `debugPrint`, use
+your own sink:
 
 ```dart
 final netoscope = Netoscope(
@@ -113,9 +137,9 @@ final netoscope = Netoscope(
 );
 ```
 
-### Inspector setup
+## Inspector
 
-Open it from anywhere you have a `BuildContext` under your `Navigator`:
+Open it from anywhere below your `Navigator`:
 
 ```dart
 IconButton(
@@ -141,68 +165,102 @@ MaterialApp(
 ```
 
 `NetworkInspectorButton` is also available on its own, and `NetworkInspector`
-is a regular widget you can embed. All of them render nothing (or just
-`child`) when the inspector is unavailable, so they can stay in release builds.
+is a regular widget you can embed. These widgets render nothing, or just
+`child`, when the inspector is unavailable, so they can stay in release builds.
 
 The inspector provides:
 
-- a list of calls with method, path, host, time, status and duration
-- search by URL or endpoint
-- filters by status group (2xx, 3xx, 4xx, 5xx, failed), method and slow calls
-- a detail view with general info, query parameters, headers, pretty-printed
-  JSON bodies and error details
-- copy of a single call, or the whole history, as JSON
-- clearing the history
+- **List:** method or protocol badge (`GET`, `WS ↑`, `SSE ↓`, `MQTT open`,
+  `gRPC-Web`), path or operation, status, duration or size, and a `GQL ERR`
+  marker for GraphQL errors.
+- **Search:** across URLs, GraphQL operation names, SSE event types, MQTT
+  topics and gRPC methods.
+- **Quick filters:** status group (2xx–5xx, Failed), method, and slow calls.
+- **Filters sheet:** protocol, time range, GraphQL only or GraphQL errors,
+  message direction, SSE event type and payload format.
+- **Details:**
+  - An Overview tab with protocol details.
+  - Request/Response tabs for calls, a Payload tab for messages, and a
+    Handshake tab for connections.
+  - A GraphQL tab listing operations, variables and errors with their paths.
+  - **View connection events**, which lists every event of a connection.
+- **Copy and export:** copy one event, or export the whole history, as JSON.
+  Clear the history after a confirmation.
 
-### Reading history in code
+Large bodies are pretty-printed in a background isolate (on platforms other
+than web) and long bodies are rendered lazily, line by line. Bodies are
+already bounded by `maxBodySize`.
+
+### Custom payload viewers
 
 ```dart
-final List<NetworkLogEntry> logs = netoscope.logs;        // newest first
-netoscope.logChanges.listen((logs) { /* … */ });          // on every change
-final String json = netoscope.exportJson();               // redacted JSON
-netoscope.clearLogs();
+class CsvViewer extends PayloadViewer {
+  const CsvViewer();
+
+  @override
+  bool canView(NetworkLogBody body) =>
+      body.contentType?.startsWith('text/csv') ?? false;
+
+  @override
+  Widget build(BuildContext context, NetworkLogBody body) =>
+      MyCsvTable(csv: body.content);
+}
+
+netoscope.openInspector(context, payloadViewers: const [CsvViewer()]);
 ```
+
+`NetworkInspector`, `NetworkInspectorButton` and `NetworkInspectorOverlay`
+accept the same `payloadViewers` parameter.
 
 ## Configuration
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `enabled` | `null` | `null` logs in debug/profile and **not** in release. `true`/`false` force it. |
-| `consoleLogLevel` | `summary` | `none`, `summary` (one line per call) or `verbose` (adds headers and bodies). |
+| `consoleLogLevel` | `summary` | `none`, `summary` or `verbose` (adds headers, bodies and protocol details). |
 | `showInspector` | `true` | Whether the inspector, button and overlay are available. |
-| `maxHistorySize` | `100` | Calls kept in memory; the oldest are evicted. |
-| `maxBodySize` | `32768` | Characters kept per body; longer bodies are truncated. `0` keeps only the kind. |
-| `captureRequestBody` | `true` | Capture request bodies. |
-| `captureResponseBody` | `true` | Capture response bodies. |
+| `maxHistorySize` | `100` | Events kept in memory; the oldest are evicted. |
+| `maxBodySize` | `32768` | Characters kept per body (also caps GraphQL documents and variables). `0` keeps only the format. |
+| `captureRequestBody` / `captureResponseBody` | `true` | Capture bodies (and outgoing/incoming message payloads). |
 | `captureHeaders` | `true` | Capture request and response headers. |
-| `excludedUrls` | `[]` | `String` (substring) or `RegExp` patterns; matching calls are not logged. |
-| `slowRequestThreshold` | `3 s` | Calls at least this long are flagged as slow. |
+| `excludedUrls` | `[]` | `String` (substring) or `RegExp` patterns; matching URLs are not logged. |
+| `slowRequestThreshold` | `3 s` | Exchanges at least this long are flagged as slow. |
 | `sensitiveKeys` | `{}` | Extra keys to redact, in addition to the built-in list. |
 | `redactionMask` | `'***'` | Replacement for redacted values. |
+| `payloadDecoders` | `[]` | Custom `PayloadDecoder`s, such as `ProtobufPayloadDecoder`. |
+| `detectGraphQL` | `true` | Recognize GraphQL operations and errors. |
+| `webhooks` | `WebhookConfig()` | Which requests are webhook deliveries, and the header names to read. |
+| `captureTransferProgress` | `true` | Record Dio upload/download progress for requests that report it. |
+| `captureRealtimeMessages` | `true` | Record individual WebSocket/SSE/MQTT/gRPC-stream messages. Lifecycle events are always recorded. |
 
-Worst-case memory is roughly
-`maxHistorySize × 2 bodies × maxBodySize` characters (about 13 MB with the
-defaults). Lower either value for memory-constrained devices.
+Worst-case memory is roughly `maxHistorySize × 2 bodies × maxBodySize`
+characters, about 13 MB with the defaults. Busy real-time connections evict
+older history quickly. Use `ignoreMessage` (for example for heartbeats),
+`excludedUrls` or `captureRealtimeMessages: false` to keep useful history
+around.
 
 ## Redaction
 
-Redaction runs inside the adapters, **before** an entry is printed, stored,
-shown or exported. It applies to header names, query parameter names and map
-keys at any depth in JSON bodies. Matching ignores case, `-`, `_`, `.` and
-spaces.
+Redaction runs inside the adapters and recorders, **before** an entry is
+printed, stored, shown or exported. It applies to:
+- Header names, query parameter names and JSON keys at any depth.
+- GraphQL variables and literal arguments in GraphQL documents.
+- XML/HTML elements and attributes.
+- Form fields, multipart fields and message payloads.
 
-A key is redacted when it
+Matching ignores case, `-`, `_`, `.` and spaces.
 
-- **contains** `authorization`, `cookie`, `password`, `passwd`, `passphrase`,
-  `secret`, `token`, `apikey`, `credential`, `session` or `privatekey`
-  (so `Set-Cookie`, `X-API-Key`, `access_token`, `refreshToken`, `newPassword`
-  all match), or
+A key is redacted when it:
+- **contains** `authorization`, `cookie`, `password`, `passwd`,
+  `passphrase`, `secret`, `token`, `apikey`, `credential`, `session`,
+  `privatekey` or `signature`, or
 - **equals** `otp`, `otpcode`, `pin`, `pwd`, `cvv`, `cvc`, `ssn`, `auth`,
-  `jwt`, `signature` or `sig`, or
+  `jwt` or `sig`, or
 - equals one of your `sensitiveKeys`.
 
-URL credentials (`https://user:pass@host`) and `Bearer`/`Basic` credentials in
-free text and error messages are masked too.
+URL credentials (`https://user:pass@host`), `Bearer`/`Basic` credentials in
+free text and error messages, and HTML inputs whose `name` is sensitive (such
+as `<input name="csrf_token" value="…">`) are masked too.
 
 ```dart
 final netoscope = Netoscope(
@@ -218,36 +276,323 @@ final netoscope = Netoscope(
 // Logged: {"email": "ada@example.com", "password": "[redacted]", "profile": {"national_id": "[redacted]"}}
 ```
 
-How bodies are captured:
+Redaction is by key. A secret sent under an innocuous name, such as a GraphQL
+variable called `$p` holding a password, is not detected. Add such keys to
+`sensitiveKeys`.
 
-| Payload | Captured as |
+## Payload inspection and decoders
+
+Each payload goes through the same pipeline:
+
+1. **Detect the format.** The declared content type comes first, with
+   sniffing as a fallback: JSON, XML, HTML, form, multipart, protobuf, text,
+   binary.
+2. **Decode** with your registered `PayloadDecoder`s.
+3. **Redact.** Structures are redacted by key; text, forms and markup by pattern.
+4. **Serialize and truncate.**
+
+Netoscope never mutates the original payload, never listens to streams it was
+not asked to observe, and never decodes binary data unless a decoder asks for
+it. Payloads larger than 1 MiB are not parsed; they are redacted by pattern
+and truncated.
+
+| Payload | Shown as |
 | --- | --- |
-| `Map`, `List`, objects with `toJson()` | Redacted JSON |
-| JSON strings or bytes | Parsed, redacted, re-encoded |
-| Form-encoded or plain text | Text, with `key=value` and `"key": value` patterns redacted |
-| Multipart (`FormData`, `MultipartRequest`) | Field names/values (redacted) and file metadata; never file contents |
-| Binary (`Uint8List`, `image/*`, `application/octet-stream`, …) | `<binary, N bytes>` |
-| Streams (`ResponseType.stream`, `StreamedRequest`) | `<stream not captured>`; never listened to |
+| `Map`, `List`, objects with `toJson()`, JSON text | Redacted, pretty-printed JSON |
+| XML / HTML | Redacted, indented markup |
+| Form-encoded | A key/value table |
+| Multipart (`FormData`, `MultipartRequest`) | Field table and file metadata; file contents are never read |
+| Protobuf / gRPC | Decoded with your decoder, otherwise `<protobuf, N bytes>` |
+| Binary (`image/*`, `octet-stream`, …) | `<binary, N bytes>` |
+| Streams | `<stream not captured>` |
 | Anything else | `<TypeName>`; `toString()` is never called |
 
-Bodies larger than 1 MiB are not parsed. They are redacted by pattern and
-truncated.
+### Protocol Buffers
 
-## Excluding endpoints
+Netoscope cannot decode protobuf without your schema. It has no protobuf
+dependency, so you supply the decoding:
 
 ```dart
 final netoscope = Netoscope(
   config: NetworkLoggerConfig(
-    excludedUrls: [
-      '/health',                          // substring
-      RegExp(r'^https://analytics\.'),    // regular expression
+    payloadDecoders: [
+      ProtobufPayloadDecoder(
+        decode: (bytes, context) => switch (context.url?.path) {
+          '/helloworld.Greeter/SayHello' =>
+            context.direction == MessageDirection.outgoing
+                ? HelloRequest.fromBuffer(bytes).toProto3Json()
+                : HelloReply.fromBuffer(bytes).toProto3Json(),
+          _ => null, // unknown message: shown as binary
+        },
+      ),
     ],
   ),
 );
 ```
 
-Exclusions are checked against the full URL, including the query string,
-before redaction.
+gRPC and gRPC-Web bodies are split into frames first, and `decode` receives
+one message at a time. Compressed frames are reported, not decompressed.
+
+### Custom formats
+
+Implement `PayloadDecoder` for any other format. `PayloadFormat` is open, so
+you can introduce your own:
+
+```dart
+class MsgPackDecoder implements PayloadDecoder {
+  @override
+  PayloadFormat get format => const PayloadFormat('msgpack', label: 'MessagePack');
+
+  @override
+  bool canDecode(PayloadContext context) =>
+      context.contentType?.contains('msgpack') ?? false;
+
+  @override
+  Object? decode(Uint8List bytes, PayloadContext context) => deserialize(bytes);
+}
+```
+
+A decoder runs only on complete payloads, before redaction. If it throws or
+returns `null`, the next decoder or the built-in handling takes over.
+
+## GraphQL
+
+GraphQL needs no extra setup. Calls made through `dioInterceptor` or
+`httpClient()` are recognized when the request carries a GraphQL document:
+- A JSON body with a `query` that actually looks like GraphQL, so a search API
+  posting `{"query": "shoes"}` is not misdetected.
+- A batch of such bodies.
+- A persisted query (`extensions.persistedQuery`).
+- A `GET ?query=…`.
+- An `application/graphql` body.
+- The `operations` field of a multipart upload.
+
+Netoscope captures:
+- The operation name and type (query, mutation or subscription).
+- The redacted document and variables.
+- The persisted-query hash, when present.
+- From the response: errors with their `path`, `extensions.code` and batch
+  index, and whether `data` was present.
+
+The HTTP outcome reflects the **transport** only. A `200 OK` with `errors` is
+a transport success, flagged as `GQL ERR` in the inspector and exposed as
+`entry.hasGraphQLErrors`. A response with both data and errors is reported as
+partial.
+
+```dart
+final graphQL = entry.graphQL;               // GraphQLDetails?
+graphQL?.operations.first.name;              // 'GetViewer'
+graphQL?.errors.first.pathLabel;             // 'viewer.email'
+graphQL?.isPartial;                          // data + errors
+```
+
+## Real-time protocols
+
+Every recorder uses the same model. Connection events (opened, closed,
+failed) share a `connectionId` with the connection's messages. When logging is
+disabled or the URL is excluded, recorders do nothing and their `observe…`
+methods return the original stream or sink.
+
+### WebSocket
+
+```dart
+final channel = WebSocketChannel.connect(url);    // package:web_socket_channel
+final socket = netoscope.webSocket(url, ignoreMessage: (m) => m == 'ping');
+
+await channel.ready;
+socket.connected(subprotocol: channel.protocol);
+
+final messages = socket.observeIncoming(
+  channel.stream,
+  closeCode: () => channel.closeCode,
+  closeReason: () => channel.closeReason,
+);
+final sink = socket.observeOutgoing(channel.sink);
+// Use `messages` and `sink` instead of channel.stream / channel.sink.
+```
+
+How the observers behave:
+- **Data:** what your code reads and writes is unchanged.
+- **Single-subscription streams:** stay single-subscription. Pause, resume and
+  cancel are forwarded to the source.
+- **Broadcast streams:** returned as they are, and recorded once however many
+  listeners you add.
+- **Close codes:** `observeOutgoing` returns a plain `StreamSink`. To send a
+  close code, call `channel.sink.close(code)` directly; the close is still
+  recorded when the incoming stream ends.
+
+### Server-Sent Events
+
+`text/event-stream` responses from `netoscope.httpClient()` are recorded
+automatically. With other clients, such as Dio with `ResponseType.stream`, wrap
+the byte stream yourself:
+
+```dart
+final response = await dio.get<ResponseBody>(url,
+    options: Options(responseType: ResponseType.stream));
+final events = netoscope.serverSentEvents(Uri.parse(url))
+  ..connected(statusCode: response.statusCode);
+final bytes = events.observeBytes(response.data!.stream);
+```
+
+Each event records its type, ID, retry delay and redacted data. Event data is
+bounded to 1 MiB per event.
+
+### gRPC
+
+gRPC-Web calls over Dio or `package:http` are recognized automatically. For
+`package:grpc`, call the recorder from a `ClientInterceptor`. This recipe is
+**not tested by Netoscope**, which has no `grpc` dependency; check it against
+your `grpc` version:
+
+```dart
+class NetoscopeGrpcInterceptor extends ClientInterceptor {
+  NetoscopeGrpcInterceptor(this.netoscope, this.host);
+
+  final Netoscope netoscope;
+  final Uri host;
+
+  @override
+  ResponseFuture<R> interceptUnary<Q, R>(ClientMethod<Q, R> method, Q request,
+      CallOptions options, ClientUnaryInvoker<Q, R> invoker) {
+    final call = netoscope.grpcCall(
+      method.path,
+      host: host,
+      metadata: options.metadata,
+      encodeMessage: (m) => m is GeneratedMessage ? m.toProto3Json() : m,
+    )..sent(request);
+    final response = invoker(method, request, options);
+    response.then(
+      (reply) => call
+        ..received(reply)
+        ..finish(),
+      onError: (Object error) => error is GrpcError
+          ? call.finish(statusCode: error.code, statusMessage: error.message)
+          : call.fail(error),
+    );
+    return response;
+  }
+}
+```
+
+The handlers are attached to the same future your code receives. They do not
+change its result or errors. For streaming calls, pass
+`callType: GrpcCallType.serverStreaming` (or another streaming type) and call
+`received` for each message.
+
+### MQTT
+
+```dart
+final mqtt = netoscope.mqtt(Uri.parse('mqtts://broker.example.com'),
+    clientId: 'app-1');
+client.onConnected = mqtt.connected;
+client.onDisconnected = mqtt.disconnected;
+client.onSubscribed = (topic) => mqtt.subscribed(topic);
+client.updates!.listen((messages) {
+  for (final m in messages) {
+    final payload = (m.payload as MqttPublishMessage).payload.message;
+    mqtt.received(m.topic, payload);
+  }
+});
+// After client.publishMessage(...):
+mqtt.published(topic, payload, qos: 1);
+```
+
+### Other protocols
+
+```dart
+final printer = netoscope.connection(Uri.parse('tcp://printer.local:9100'),
+    label: 'RAW')
+  ..opened();
+printer.message(MessageDirection.outgoing, jobBytes);
+printer.closed();
+```
+
+## Webhooks
+
+### Outbound deliveries from this app
+
+A request counts as a webhook delivery when its URL matches
+`WebhookConfig.endpoints`, or when a Dio request carries a `WebhookAttempt`:
+
+```dart
+final netoscope = Netoscope(
+  config: const NetworkLoggerConfig(
+    webhooks: WebhookConfig(endpoints: ['hooks.partner.example'], maxAttempts: 5),
+  ),
+);
+
+dio.post(url, data: payload, options: Options(extra: {
+  Netoscope.webhookKey: const WebhookAttempt(
+    eventType: 'order.created', deliveryId: 'dlv_1', attempt: 2, maxAttempts: 5),
+}));
+```
+
+Each attempt records:
+- **Outcome:** `delivered` (2xx); `retryable` (timeout, connection error, 408,
+  425, 429 or 5xx); `exhausted` (retryable, but on the last attempt);
+  `rejected` (other 4xx).
+- **Delivery details:** event type, delivery ID, attempt number and the
+  delivery error.
+- **Signature algorithm only:** for example `sha256` from
+  `X-Hub-Signature-256: sha256=…`.
+
+Delivery IDs, event types and attempt numbers can also come from common
+headers. `WebhookConfig` lists them, and you can change the names.
+
+**Signature headers are always fully redacted.** Only known algorithm names
+can be extracted, so a signature value never reaches the logs. Netoscope never
+sees signing keys.
+
+### Deliveries made by your backend
+
+A Flutter interceptor **cannot** observe webhooks your servers send or
+receive. If your backend keeps delivery logs, fetch them through your own API
+and import them. They are redacted like captured traffic:
+
+```dart
+netoscope.importWebhookDeliveries([
+  for (final log in await myApi.webhookDeliveryLogs())
+    WebhookDeliveryRecord(
+      endpoint: Uri.parse(log.url),
+      timestamp: log.sentAt,
+      eventType: log.event,
+      attempt: log.attempt,
+      maxAttempts: log.maxAttempts,
+      statusCode: log.responseStatus,
+      duration: log.duration,
+      error: log.error,
+      requestHeaders: log.headers,
+      requestBody: log.payload,
+    ),
+]);
+```
+
+## Event model
+
+Every recorded event is a `NetworkLogEntry`. HTTP calls look exactly as they
+did in 0.1.0. The newer fields have defaults:
+
+| Field | Meaning |
+| --- | --- |
+| `protocol` | `http`, `webSocket`, `sse`, `grpc`, `mqtt`, `other` |
+| `kind` | `exchange` (request/response), `connection` (lifecycle) or `message` |
+| `direction` | `outgoing` / `incoming` for messages |
+| `lifecycle` | `opened` / `closed` / `failed` for connection events |
+| `connectionId` | Groups a connection's events |
+| `details` | Typed `ProtocolDetails`: `GraphQLDetails`, `WebhookDetails`, `GrpcDetails`, `SseDetails`, `WebSocketDetails`, `MqttDetails`, `TransferDetails` |
+| `metadata` | Free-form, redacted strings (for example message counts on close) |
+| `requestBody` / `responseBody` | `NetworkLogBody` with `kind`, `format` (`PayloadFormat`), `contentType`, `content`, `isTruncated` |
+
+```dart
+entry.detail<SseDetails>()?.eventType;
+entry.webhook?.outcome;
+entry.messageBody;              // the payload of a message, either direction
+entry.outcome;                  // success, httpError, failure, cancelled
+```
+
+`ProtocolDetails` is an open class, so custom recorders can attach their own
+details.
 
 ## Architecture
 
@@ -258,43 +603,47 @@ Dependencies point inwards only.
 lib/
   netoscope.dart                 public exports
   src/
-    core/                        entities, contracts, use cases (pure Dart)
+    core/                        entities, contracts (store, sink, PayloadDecoder), use cases
     config/                      NetworkLoggerConfig
-    security/                    LogRedactor, BodyCapture (redaction, truncation)
-    data/                        InMemoryNetworkLogStore, console sink, JSON export
-    adapters/                    Dio interceptor, package:http client, shared capture policy
+    security/                    redaction, payload capture pipeline, format detection, protobuf decoder
+    protocols/                   pure-Dart protocol parsing: GraphQL, gRPC framing, SSE, webhooks
+    data/                        in-memory store, console sink, JSON export
+    adapters/                    Dio interceptor, package:http client, real-time recorders, webhook import
     network_inspector.dart       Netoscope facade (composition root)
-    ui/                          optional Flutter inspector
+    ui/                          optional Flutter inspector, filters, payload viewers
 ```
 
-- `core` imports nothing from the package except other `core` files. It has no
-  Dio, `http` or Flutter dependency.
-- `data` implements the core contracts.
-- `security` turns raw payloads into safe values for the core entities.
-- `adapters` translate Dio and `http` types into `NetworkLogEntry` objects through
-  the security layer.
-- The `Netoscope` facade wires these together with constructor injection.
-  There are no singletons or global state.
-- `ui` depends only on the facade's public API. The facade does not import the UI;
-  `openInspector` is an extension provided by the UI layer.
+- **`core`** has no Dio, `http` or Flutter dependency, and no protocol
+  library dependency.
+- **`protocols` and `security`** are pure Dart and depend only on `core`.
+- **`adapters`** translate client types and recorder calls into entries
+  through the security and protocol layers.
+- **The facade** wires everything with constructor injection. There are no
+  singletons or global state.
+- **`ui`** depends only on the facade's public API and core entities. The
+  facade does not import the UI.
 
 ## Example
 
-[`example/`](example) is a runnable app that uses an offline demo backend, so
-no network access or credentials are needed:
+[`example/`](example) is a runnable app with an offline demo backend, so no
+network access or credentials are needed:
 
 ```sh
 cd example
 flutter run
 ```
 
-It demonstrates GET/POST requests, redaction, a 404, a slow call, a timeout,
-a cancelled call, an excluded endpoint, `package:http`, and the inspector.
+It demonstrates:
+- **REST calls:** GET and POST, redaction, a 404, a slow call, a timeout, a
+  cancellation and an excluded endpoint.
+- **Protocols:** a GraphQL query with partial errors, a Server-Sent Events
+  stream, a simulated WebSocket session and a webhook delivery that gets a 503.
+- **Tooling:** `package:http` and the inspector.
 
 ### Screenshots
 
-_Screenshots of the inspector list and detail views will be added before the
-first stable release._
+_Screenshots of the inspector will be added before the first stable
+release._
 
 ## Testing
 
@@ -303,30 +652,42 @@ flutter test              # package tests
 cd example && flutter test
 ```
 
-The test suite uses fake Dio adapters and `package:http`'s `MockClient`; it
-never touches the network.
+The tests use fake Dio adapters, `package:http`'s `MockClient`, in-memory
+streams and hand-built protocol fixtures. They never touch the network.
 
 ## Limitations
 
-- **Duration** is measured from the moment Netoscope sees the request. For Dio
-  that is when the interceptor runs; for `ResponseType.stream` it stops when
-  headers arrive. For `package:http` it stops when the response body has been
-  fully read.
-- **`package:http`**: a call is recorded once its response stream completes,
-  fails or is cancelled. A response that is never read is never recorded.
-  The returned response is a plain `StreamedResponse`, so client-specific
-  subclasses such as `IOStreamedResponse` (with `detachSocket`) are not
-  preserved. Timeouts applied *outside* the client, such as
-  `client.get(url).timeout(...)`, are not visible to the wrapper.
-- **Dio**: if another interceptor *replaces* `RequestOptions` (via
-  `copyWith`) after Netoscope, the duration for that call is unknown. Response
-  sizes come from `Content-Length`, or from raw strings and bytes; decoded JSON
-  without `Content-Length` has no size.
-- Entries are recorded on completion. In-flight calls are not shown.
-- History lives in memory and is lost when the app restarts.
-- Redaction is key-based. Secrets stored under innocuous keys, or embedded
-  in free text, are not detected. Add such keys to `sensitiveKeys`, or disable
-  body capture for those endpoints.
+- **Duration** is measured from when Netoscope sees the request:
+  - Dio: when the interceptor runs. With `ResponseType.stream`, timing stops
+    when the headers arrive.
+  - `package:http`: when the body has been fully read.
+  - Closed connections: the duration is the connection's lifetime.
+- **`package:http`:**
+  - A call is recorded once its response stream completes, fails or is
+    cancelled, so a response that is never read is never recorded.
+  - Event streams are the exception: they are recorded as they arrive.
+  - The returned response is a plain `StreamedResponse`, so subclasses such as
+    `IOStreamedResponse` (with `detachSocket`) are not preserved.
+  - Timeouts applied outside the client, such as
+    `client.get(url).timeout(...)`, are not visible.
+- **Dio:**
+  - If a later interceptor *replaces* `RequestOptions` (`copyWith`), that
+    call's duration is unknown.
+  - SSE over Dio needs the manual `serverSentEvents` recorder.
+  - Decoded JSON without `Content-Length` has no size.
+- **Recorder-based protocols** (WebSocket, native gRPC, MQTT, custom) see only
+  what you route through the recorder. Netoscope does not hook sockets.
+- **GraphQL:**
+  - Responses larger than 1 MiB are not parsed for errors.
+  - Detection depends on the request body being available. Requests sent as
+    `http.StreamedRequest`, or as Dio streams, are not recognized.
+- **gRPC:** native gRPC over plain HTTP clients is not supported (no trailer
+  access), and compressed and `grpc-web-text` messages are not decoded.
+- **History:** entries are recorded on completion (exchanges) or when they
+  happen (connection events and messages). In-flight HTTP calls are not shown,
+  and history is lost when the app restarts.
+- **Redaction** is key- and pattern-based. Secrets under innocuous keys or
+  inside free text may not be detected.
 
 ## Security considerations
 
@@ -334,10 +695,11 @@ never touches the network.
   redaction. Treat exports and screenshots accordingly.
 - Logging is disabled in release builds unless you pass `enabled: true`.
   Only do that deliberately, for example in internal QA builds.
-- Netoscope does not send data anywhere. Entries reach only the in-memory
-  store, the console and any sinks you add.
-- The package is not a substitute for production observability, audit
-  logging or data-protection controls.
+- Netoscope sends nothing anywhere. Entries go only to the in-memory store,
+  the console and any sinks you add.
+- Webhook signature values and signing keys are never recorded.
+- Netoscope is not a substitute for production observability, audit logging
+  or data-protection controls.
 
 ## Contributing
 
@@ -349,8 +711,8 @@ flutter analyze
 flutter test
 ```
 
-Keep `core` free of Flutter and HTTP-client imports, add tests for new
-behavior and document public APIs.
+Keep `core`, `protocols` and `security` free of Flutter and client-library
+imports, add tests for new behavior and document public APIs.
 
 ## License
 

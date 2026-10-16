@@ -22,6 +22,7 @@ class LogRedactor {
     'credential',
     'session',
     'privatekey',
+    'signature',
   ];
 
   /// Short keys that are sensitive only on an exact (normalized) match.
@@ -35,7 +36,6 @@ class LogRedactor {
     'ssn',
     'auth',
     'jwt',
-    'signature',
     'sig',
   };
 
@@ -130,6 +130,49 @@ class LogRedactor {
     });
     return result.replaceAllMapped(_bearer, (m) => '${m.group(1)} $mask');
   }
+
+  static final RegExp _element = RegExp(
+    r'<((?:[\w.\-]+:)?([\w.\-]+))(\s[^<>]*)?>([^<]*)(</\1\s*>|$)',
+  );
+  static final RegExp _tag = RegExp(r'<[A-Za-z][^<>]*>');
+  static final RegExp _attribute =
+      RegExp(r'''([\w.:\-]+)(\s*=\s*)("[^"]*"|'[^']*')''');
+
+  /// Masks sensitive values in XML or HTML [text].
+  ///
+  /// Handles element text (`<password>…</password>`), attributes
+  /// (`token="…"`) and form inputs whose `name`/`id` is sensitive
+  /// (`<input name="csrf_token" value="…">`), plus bearer credentials.
+  String redactMarkup(String text) {
+    var result = text.replaceAllMapped(_element, (m) {
+      if (!isSensitiveKey(m.group(2)!) || m.group(4)!.trim().isEmpty) {
+        return m.group(0)!;
+      }
+      return '<${m.group(1)}${m.group(3) ?? ''}>$mask${m.group(5)}';
+    });
+    result = result.replaceAllMapped(_tag, (tag) => _redactTag(tag.group(0)!));
+    return result.replaceAllMapped(_bearer, (m) => '${m.group(1)} $mask');
+  }
+
+  String _redactTag(String tag) {
+    final attributes = {
+      for (final m in _attribute.allMatches(tag))
+        m.group(1)!.toLowerCase(): _unquote(m.group(3)!),
+    };
+    final namedSensitive = isSensitiveKey(attributes['name'] ?? '') ||
+        isSensitiveKey(attributes['id'] ?? '');
+    return tag.replaceAllMapped(_attribute, (m) {
+      final name = m.group(1)!;
+      final localName = name.contains(':') ? name.split(':').last : name;
+      final masked = isSensitiveKey(localName) ||
+          (namedSensitive && localName.toLowerCase() == 'value');
+      if (!masked) return m.group(0)!;
+      final quote = m.group(3)![0];
+      return '$name${m.group(2)}$quote$mask$quote';
+    });
+  }
+
+  static String _unquote(String value) => value.substring(1, value.length - 1);
 
   static String _normalize(String key) =>
       key.toLowerCase().replaceAll(RegExp(r'[\s\-_.]'), '');

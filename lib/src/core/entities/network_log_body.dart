@@ -1,9 +1,14 @@
-/// How a captured payload was interpreted.
+import 'payload_format.dart';
+
+/// How a captured payload is represented in [NetworkLogBody.content].
+///
+/// This is the coarse rendering category. See [NetworkLogBody.format] for the
+/// detected format (XML, HTML, form, protobuf, …).
 enum NetworkBodyKind {
-  /// Structured JSON (from a map, a list or a JSON string).
+  /// Structured JSON (from a map, a list, a JSON string or a decoder).
   json,
 
-  /// Plain or form-encoded text.
+  /// Text, including XML, HTML and form-encoded bodies.
   text,
 
   /// A multipart form. [NetworkLogBody.content] describes the fields and
@@ -23,13 +28,17 @@ enum NetworkBodyKind {
 /// An immutable, already-redacted snapshot of a request or response body.
 class NetworkLogBody {
   /// Creates a body snapshot.
+  ///
+  /// When [format] is omitted it is derived from [kind].
   const NetworkLogBody({
     required this.kind,
     required this.content,
     this.isTruncated = false,
-  });
+    PayloadFormat? format,
+    this.contentType,
+  }) : _format = format;
 
-  /// How the payload was interpreted.
+  /// How [content] is represented.
   final NetworkBodyKind kind;
 
   /// Redacted text, possibly truncated. For [NetworkBodyKind.json] this is
@@ -40,9 +49,28 @@ class NetworkLogBody {
   /// Whether [content] was cut at the configured size limit.
   final bool isTruncated;
 
+  /// The declared content type, if any.
+  final String? contentType;
+
+  final PayloadFormat? _format;
+
+  /// The detected or decoded payload format.
+  PayloadFormat get format =>
+      _format ??
+      switch (kind) {
+        NetworkBodyKind.json => PayloadFormat.json,
+        NetworkBodyKind.text => PayloadFormat.text,
+        NetworkBodyKind.multipart => PayloadFormat.multipart,
+        NetworkBodyKind.binary => PayloadFormat.binary,
+        NetworkBodyKind.stream => PayloadFormat.stream,
+        NetworkBodyKind.unsupported => PayloadFormat.unsupported,
+      };
+
   /// A JSON-compatible representation of this body.
   Map<String, Object?> toJson() => {
         'kind': kind.name,
+        'format': format.id,
+        'contentType': contentType,
         'content': content,
         'truncated': isTruncated,
       };
@@ -51,9 +79,12 @@ class NetworkLogBody {
   bool operator ==(Object other) =>
       other is NetworkLogBody &&
       other.kind == kind &&
+      other.format == format &&
       other.content == content &&
-      other.isTruncated == isTruncated;
+      other.isTruncated == isTruncated &&
+      other.contentType == contentType;
 
   @override
-  int get hashCode => Object.hash(kind, content, isTruncated);
+  int get hashCode =>
+      Object.hash(kind, format, content, isTruncated, contentType);
 }

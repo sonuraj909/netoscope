@@ -4,16 +4,25 @@ import 'package:http/http.dart' as http;
 import 'adapters/dio/dio_network_logger.dart';
 import 'adapters/http/http_network_logger.dart';
 import 'adapters/log_capture.dart';
+import 'adapters/realtime/connection_recorder.dart';
+import 'adapters/realtime/grpc_call_recorder.dart';
+import 'adapters/realtime/mqtt_recorder.dart';
+import 'adapters/realtime/sse_recorder.dart';
+import 'adapters/realtime/web_socket_recorder.dart';
+import 'adapters/webhook_importer.dart';
 import 'config/network_logger_config.dart';
 import 'core/contracts/network_log_sink.dart';
 import 'core/contracts/network_log_store.dart';
+import 'core/entities/network_event_kind.dart';
 import 'core/entities/network_log_entry.dart';
+import 'core/entities/protocol_details.dart';
 import 'core/usecases/clear_network_logs.dart';
 import 'core/usecases/get_network_logs.dart';
 import 'core/usecases/record_network_log.dart';
 import 'data/export/network_log_json_exporter.dart';
 import 'data/sinks/console_network_log_sink.dart';
 import 'data/storage/in_memory_network_log_store.dart';
+import 'protocols/webhook/webhook_delivery_record.dart';
 
 /// The entry point to Netoscope.
 ///
@@ -75,6 +84,10 @@ class Netoscope {
   /// options to keep that request out of the logs.
   static const String skipLoggingKey = netoscopeSkipKey;
 
+  /// Add `extra: {Netoscope.webhookKey: WebhookAttempt(...)}` to a Dio
+  /// request's options to record it as a webhook delivery attempt.
+  static const String webhookKey = netoscopeWebhookKey;
+
   /// The active configuration.
   final NetworkLoggerConfig config;
 
@@ -116,6 +129,102 @@ class Netoscope {
   http.Client httpClient([http.Client? inner]) {
     final client = inner ?? http.Client();
     return isEnabled ? HttpNetworkLogger(client, _capture) : client;
+  }
+
+  /// Returns a recorder for a WebSocket connection to [url].
+  ///
+  /// [headers] are the handshake headers, if known. Messages for which
+  /// [ignoreMessage] returns `true` (such as heartbeats) are counted but not
+  /// recorded.
+  WebSocketRecorder webSocket(
+    Uri url, {
+    Map<String, String> headers = const {},
+    bool Function(Object? message)? ignoreMessage,
+  }) =>
+      WebSocketRecorder(
+        _capture,
+        url: url,
+        requestHeaders: headers,
+        ignoreMessage: ignoreMessage,
+      );
+
+  /// Returns a recorder for a Server-Sent Events connection to [url].
+  ///
+  /// Not needed for clients from [httpClient], which record event streams
+  /// automatically.
+  SseRecorder serverSentEvents(
+    Uri url, {
+    Map<String, String> headers = const {},
+    bool Function(Object? message)? ignoreMessage,
+  }) =>
+      SseRecorder(
+        _capture,
+        url: url,
+        requestHeaders: headers,
+        ignoreMessage: ignoreMessage,
+      );
+
+  /// Returns a recorder for an MQTT session with the broker at [url].
+  MqttRecorder mqtt(
+    Uri url, {
+    String? clientId,
+    bool Function(Object? message)? ignoreMessage,
+  }) =>
+      MqttRecorder(
+        _capture,
+        url: url,
+        clientId: clientId,
+        ignoreMessage: ignoreMessage,
+      );
+
+  /// Returns a recorder for one gRPC call to [path]
+  /// (`/package.Service/Method`) on [host].
+  ///
+  /// [metadata] is recorded like request headers (and redacted).
+  /// [encodeMessage] converts messages into something inspectable, for
+  /// example `(m) => (m as GeneratedMessage).toProto3Json()`.
+  GrpcCallRecorder grpcCall(
+    String path, {
+    Uri? host,
+    GrpcCallType callType = GrpcCallType.unary,
+    Map<String, String> metadata = const {},
+    Object? Function(Object? message)? encodeMessage,
+  }) =>
+      GrpcCallRecorder(
+        _capture,
+        path: path,
+        host: host,
+        callType: callType,
+        metadata: metadata,
+        encodeMessage: encodeMessage,
+      );
+
+  /// Returns a recorder for a connection of any other protocol, labelled
+  /// [label] in the inspector.
+  ConnectionRecorder connection(
+    Uri url, {
+    NetworkProtocol protocol = NetworkProtocol.other,
+    String label = 'CONN',
+    Map<String, String> headers = const {},
+    bool Function(Object? message)? ignoreMessage,
+  }) =>
+      ConnectionRecorder(
+        _capture,
+        protocol: protocol,
+        url: url,
+        label: label,
+        requestHeaders: headers,
+        ignoreMessage: ignoreMessage,
+      );
+
+  /// Adds webhook delivery attempts reported by a backend to the history.
+  ///
+  /// A Flutter app cannot observe incoming server-to-server webhooks; use
+  /// this to inspect delivery logs your backend exposes. Records are
+  /// redacted like captured traffic.
+  void importWebhookDeliveries(Iterable<WebhookDeliveryRecord> records) {
+    if (!isEnabled) return;
+    WebhookImporter(_capture).import(records);
   }
 
   /// Releases the history created by this instance. A store passed to the

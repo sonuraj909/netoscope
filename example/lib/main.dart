@@ -30,6 +30,7 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
       slowRequestThreshold: Duration(seconds: 2),
       sensitiveKeys: {'email'},
       excludedUrls: ['/health'],
+      webhooks: WebhookConfig(endpoints: ['/hooks/'], maxAttempts: 3),
     ),
   );
 
@@ -122,6 +123,49 @@ class _DemoScreenState extends State<DemoScreen> {
     await widget.dio.get<void>('/long-poll', cancelToken: token);
   }
 
+  Future<void> _serverSentEvents() async {
+    // package:http clients from netoscope.httpClient() record event streams
+    // automatically: one entry when connected, one per event, one on close.
+    final response = await widget.httpClient.send(
+      http.Request('GET', Uri.parse('https://demo.netoscope.dev/events')),
+    );
+    await response.stream.drain<void>();
+  }
+
+  Future<void> _webSocketSession() async {
+    final url = Uri.parse('wss://demo.netoscope.dev/echo');
+    final socket = DemoEchoSocket();
+    final recorder = widget.netoscope.webSocket(url)
+      ..connected(subprotocol: 'echo');
+    final incoming = recorder.observeIncoming(
+      socket.stream,
+      closeCode: () => socket.closeCode,
+    );
+    final sink = recorder.observeOutgoing(socket.sink);
+    final replies = incoming.take(2).toList();
+    sink
+      ..add('{"type":"hello","token":"demo-session-token"}')
+      ..add('ping');
+    await replies;
+    await socket.close();
+  }
+
+  Future<void> _webhookDelivery() => widget.dio.post<void>(
+        '/hooks/orders',
+        data: {'event': 'order.created', 'orderId': 42},
+        options: Options(
+          headers: {'x-hub-signature-256': 'sha256=5d41402abc4b2a76b9719d91'},
+          extra: {
+            Netoscope.webhookKey: const WebhookAttempt(
+              eventType: 'order.created',
+              deliveryId: 'dlv_001',
+              attempt: 2,
+              maxAttempts: 3,
+            ),
+          },
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final dio = widget.dio;
@@ -148,6 +192,19 @@ class _DemoScreenState extends State<DemoScreen> {
       ('GET /flaky (timeout)', () => dio.get<void>('/flaky')),
       ('GET /long-poll (cancelled)', _cancelledRequest),
       ('GET /health (excluded)', () => dio.get<void>('/health')),
+      (
+        'GraphQL query (partial errors)',
+        () => dio.post<void>(
+              '/graphql',
+              data: {
+                'query': 'query Viewer { viewer { id name email } }',
+                'operationName': 'Viewer',
+              },
+            ),
+      ),
+      ('SSE stream (3 events)', _serverSentEvents),
+      ('WebSocket echo (simulated)', _webSocketSession),
+      ('Webhook delivery (503, retryable)', _webhookDelivery),
       (
         'package:http GET /status',
         () => widget.httpClient

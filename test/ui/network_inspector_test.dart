@@ -94,7 +94,11 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilterChip, 'Slow'));
     await tester.pump();
-    await tester.ensureVisible(find.widgetWithText(FilterChip, 'POST'));
+    await tester.dragUntilVisible(
+      find.widgetWithText(FilterChip, 'POST'),
+      find.byType(ListView).first,
+      const Offset(-200, 0),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, 'POST'));
     await tester.pump();

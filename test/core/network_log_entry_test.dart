@@ -101,9 +101,14 @@ void main() {
       expect(json['timestamp'], '2026-01-01T12:00:00.000Z');
       expect(json['responseBody'], {
         'kind': 'json',
+        'format': 'json',
+        'contentType': null,
         'content': '{"id":1}',
         'truncated': false,
       });
+      expect(json['protocol'], 'http');
+      expect(json['kind'], 'exchange');
+      expect(json['details'], isEmpty);
       expect(json['error'], isNull);
     });
   });
