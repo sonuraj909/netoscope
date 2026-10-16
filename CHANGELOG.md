@@ -1,3 +1,7 @@
+## 0.2.1
+
+- Adds screenshots to the pub.dev listing and the README.
+
 ## 0.2.0
 
 Multi-protocol inspection. Existing HTTP integrations and APIs keep working

@@ -3,7 +3,7 @@ description: >-
   Debug-time network inspector for Flutter: Dio, package:http, GraphQL, SSE,
   WebSocket, gRPC and webhooks, with redaction, payload decoders and an
   optional in-app UI.
-version: 0.2.0
+version: 0.2.1
 repository: https://github.com/sonuraj909/netoscope
 issue_tracker: https://github.com/sonuraj909/netoscope/issues
 
@@ -28,3 +28,15 @@ topics:
   - logging
   - http
   - dio
+
+screenshots:
+  - description: Request list with status, timing, tags and N+1 detection.
+    path: screenshots/request_list.webp
+  - description: Request details with headers and a redacted JSON body.
+    path: screenshots/request_detail.webp
+  - description: Collapsible JSON tree viewer in the dark theme.
+    path: screenshots/json_tree.webp
+  - description: Gantt timeline of overlapping calls.
+    path: screenshots/timeline.webp
+  - description: Traffic statistics with status breakdown and N+1 findings.
+    path: screenshots/statistics.webp

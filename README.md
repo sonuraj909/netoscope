@@ -8,6 +8,14 @@ WebSockets, gRPC(-Web), MQTT and webhooks. Secrets are redacted before
 anything is printed, stored, shown or exported. History is kept in a bounded
 in-memory store, and an optional in-app inspector lets you browse it.
 
+<p>
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/request_list.webp" width="160" alt="Request list">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/request_detail.webp" width="160" alt="Request details with redaction">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/json_tree.webp" width="160" alt="JSON tree viewer">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/timeline.webp" width="160" alt="Timeline">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/statistics.webp" width="160" alt="Statistics">
+</p>
+
 > **Netoscope is a debugging aid, not a production observability tool.**
 > Logging is off in release builds by default. See
 > [Security considerations](#security-considerations).
