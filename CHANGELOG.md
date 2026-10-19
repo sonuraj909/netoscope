@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.3
 
 - `NetworkLoggerConfig.inspectorThemeMode` (`system`, `light`, `dark`):
   force the inspector's theme instead of following the app's brightness, for
