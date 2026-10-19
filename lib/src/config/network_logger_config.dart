@@ -14,6 +14,18 @@ enum ConsoleLogLevel {
   verbose,
 }
 
+/// Which theme the in-app inspector uses.
+enum InspectorThemeMode {
+  /// Follows the host app's theme brightness.
+  system,
+
+  /// Always light.
+  light,
+
+  /// Always dark.
+  dark,
+}
+
 const bool _isReleaseMode = bool.fromEnvironment('dart.vm.product');
 
 /// Resolves whether logging is active.
@@ -36,6 +48,7 @@ class NetworkLoggerConfig {
     this.showInspector = true,
     this.showFloatingButton = true,
     this.showNotification = true,
+    this.inspectorThemeMode = InspectorThemeMode.system,
     this.maxHistorySize = 100,
     this.maxBodySize = 32 * 1024,
     this.captureRequestBody = true,
@@ -79,6 +92,13 @@ class NetworkLoggerConfig {
 
   /// Whether the in-app inspector and its button are available.
   final bool showInspector;
+
+  /// The inspector's initial theme. [InspectorThemeMode.system] (the default)
+  /// follows the host app's theme brightness; `light` and `dark` force one,
+  /// for example a dark inspector in an app that only has a light theme.
+  /// It can be switched at runtime from the inspector's settings or with
+  /// `Netoscope.setInspectorThemeMode`.
+  final InspectorThemeMode inspectorThemeMode;
 
   /// The maximum number of calls kept in history. Older calls are evicted.
   final int maxHistorySize;

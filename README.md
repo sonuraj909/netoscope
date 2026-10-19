@@ -301,6 +301,18 @@ MaterialApp(
 );
 ```
 
+The inspector follows your app's theme brightness. Switch it to light or dark
+from the inspector's settings (the gear icon), or set the initial mode, for
+example a dark inspector in a light-only app:
+
+```dart
+final netoscope = Netoscope(
+  config: const NetworkLoggerConfig(
+    inspectorThemeMode: InspectorThemeMode.dark,
+  ),
+);
+```
+
 `NetworkInspectorButton` is also available on its own, and `NetworkInspector`
 is a regular widget you can embed. These widgets render nothing, or just
 `child`, when the inspector is unavailable, so they can stay in release builds.
@@ -513,8 +525,8 @@ Other native sources can be recorded with `netoscope.recordExternalCall(…)`.
 
 ## Runtime switches
 
-Recording, the floating button and the notification can be switched on and
-off while the app runs, from code or from the inspector's **settings** panel
+Recording, the floating button, the notification and the inspector theme
+(system, light or dark) can be switched while the app runs, from code or from the inspector's **settings** panel
 (the gear icon):
 
 ```dart
@@ -522,14 +534,15 @@ netoscope.setLoggingEnabled(false);        // pause capture; history is kept
 netoscope.setLoggingEnabled(true);         // resume
 netoscope.setFloatingButtonEnabled(false); // hide the floating button
 netoscope.setNotificationEnabled(true);    // show the activity notification
+netoscope.setInspectorThemeMode(InspectorThemeMode.dark); // or .light / .system
 
-netoscope.settings;          // NetoscopeSettings(recording, floatingButton, notification)
+netoscope.settings;          // NetoscopeSettings(recording, floatingButton, notification, themeMode)
 netoscope.settingsChanges;   // Stream<NetoscopeSettings>
 netoscope.isRecording;       // false while paused
 ```
 
-Initial values come from `NetworkLoggerConfig.showFloatingButton` and
-`showNotification`. While recording is paused, the inspector shows a
+Initial values come from `NetworkLoggerConfig.showFloatingButton`,
+`showNotification` and `inspectorThemeMode`. While recording is paused, the inspector shows a
 **Recording paused · Resume** banner.
 
 These are runtime conveniences, not a security control. A logger that is
@@ -584,6 +597,7 @@ notification mechanism, implement `NetworkActivityNotifier` and pass it to
 | `showInspector` | `true` | Whether the inspector, button and overlay are available. |
 | `showFloatingButton` | `true` | Initial state of the floating-button switch. |
 | `showNotification` | `true` | Initial state of the notification switch (when a notifier is attached). |
+| `inspectorThemeMode` | `system` | Initial inspector theme: `system` follows the app's brightness; `light` or `dark` force one. Switchable at runtime. |
 | `maxHistorySize` | `100` | Events kept in memory; the oldest are evicted. |
 | `maxBodySize` | `32768` | Characters kept per body (also caps GraphQL documents and variables). `0` keeps only the format. |
 | `captureRequestBody` / `captureResponseBody` | `true` | Capture bodies (and outgoing/incoming message payloads). |

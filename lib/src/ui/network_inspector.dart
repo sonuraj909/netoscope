@@ -75,6 +75,7 @@ class _NetworkInspectorState extends State<NetworkInspector> {
 
   @override
   Widget build(BuildContext context) => InspectorThemeScope(
+        netoscope: widget.netoscope,
         child: RequestListScreen(
           netoscope: widget.netoscope,
           payloadViewers: widget.payloadViewers,

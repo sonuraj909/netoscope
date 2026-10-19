@@ -152,6 +152,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
   void _openEntry(NetworkLogEntry entry) => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => InspectorThemeScope(
+            netoscope: widget.netoscope,
             child: RequestDetailScreen(
               entry: entry,
               slowThreshold: _slowThreshold,
@@ -170,6 +171,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => InspectorThemeScope(
+            netoscope: widget.netoscope,
             child: RequestListScreen(
               netoscope: widget.netoscope,
               payloadViewers: widget.payloadViewers,
@@ -183,6 +185,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
   void _openStatistics() => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => InspectorThemeScope(
+            netoscope: widget.netoscope,
             child: StatisticsScreen(
               netoscope: widget.netoscope,
               onShowCalls: _showCalls,
@@ -195,6 +198,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => InspectorThemeScope(
+            netoscope: widget.netoscope,
             child: TimelineScreen(entries: visible, onOpenEntry: _openEntry),
           ),
         ),
@@ -234,10 +238,14 @@ class _RequestListScreenState extends State<RequestListScreen> {
     if (confirmed ?? false) widget.netoscope.clearLogs();
   }
 
+  // The sheet paints its own surface and handle: the modal's are themed once,
+  // when it opens, and would not follow a theme switch made from the sheet.
   Future<void> _openSettings() => showModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
-        showDragHandle: true,
+        showDragHandle: false,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         builder: (_) => InspectorSettingsSheet(netoscope: widget.netoscope),
       );
 

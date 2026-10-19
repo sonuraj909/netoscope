@@ -120,6 +120,7 @@ class Netoscope {
   )   : _settings = NetoscopeSettings(
           floatingButton: config.showFloatingButton,
           notification: config.showNotification,
+          themeMode: config.inspectorThemeMode,
         ),
         _getLogs = GetNetworkLogs(store),
         _clearLogs = ClearNetworkLogs(store),
@@ -195,6 +196,11 @@ class Netoscope {
   /// Shows or hides the activity notification (needs a notifier).
   void setNotificationEnabled(bool enabled) =>
       updateSettings(_settings.copyWith(notification: enabled));
+
+  /// Switches the inspector between following the host app's theme, light
+  /// and dark. Open inspector screens update immediately.
+  void setInspectorThemeMode(InspectorThemeMode mode) =>
+      updateSettings(_settings.copyWith(themeMode: mode));
 
   /// Replaces all runtime switches at once. Ignored when logging is
   /// disabled for this build.

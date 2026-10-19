@@ -1,3 +1,13 @@
+## Unreleased
+
+- `NetworkLoggerConfig.inspectorThemeMode` (`system`, `light`, `dark`):
+  force the inspector's theme instead of following the app's brightness, for
+  example a dark inspector in a light-only app. Applies to every inspector
+  screen. The default, `system`, keeps the previous behavior.
+- Theme switch in the inspector's settings panel (System / Light / Dark), and
+  `Netoscope.setInspectorThemeMode` to change it from code. Open inspector
+  screens update immediately. `NetoscopeSettings` gains `themeMode`.
+
 ## 0.2.2
 
 - README: a quick start and a guide for switching from other network loggers.

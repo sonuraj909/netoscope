@@ -14,7 +14,7 @@ export 'src/adapters/realtime/sse_recorder.dart' show SseRecorder;
 export 'src/adapters/realtime/web_socket_recorder.dart' show WebSocketRecorder;
 export 'src/config/netoscope_settings.dart' show NetoscopeSettings;
 export 'src/config/network_logger_config.dart'
-    show ConsoleLogLevel, NetworkLoggerConfig;
+    show ConsoleLogLevel, InspectorThemeMode, NetworkLoggerConfig;
 export 'src/core/contracts/network_activity_notifier.dart'
     show NetworkActivityNotifier, NetworkActivitySummary;
 export 'src/core/contracts/network_log_sink.dart' show NetworkLogSink;

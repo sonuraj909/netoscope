@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../../config/netoscope_settings.dart';
+import '../../config/network_logger_config.dart';
+import '../../network_inspector.dart';
+
 bool _isDark(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark;
 
@@ -186,10 +190,19 @@ ThemeData inspectorTheme(Brightness brightness, {String? fontFamily}) {
   );
 }
 
-/// Applies [inspectorTheme] (matching the host's brightness) to [child].
+/// Applies [inspectorTheme] to [child], in the brightness chosen by
+/// [Netoscope.settings]' theme mode (the host's brightness for
+/// [InspectorThemeMode.system]). Rebuilds when the mode is switched.
 class InspectorThemeScope extends StatelessWidget {
   /// Creates the scope.
-  const InspectorThemeScope({super.key, required this.child});
+  const InspectorThemeScope({
+    super.key,
+    required this.netoscope,
+    required this.child,
+  });
+
+  /// The logger whose theme setting is applied.
+  final Netoscope netoscope;
 
   /// The inspector content.
   final Widget child;
@@ -197,14 +210,50 @@ class InspectorThemeScope extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final host = Theme.of(context);
-    return Theme(
-      data: inspectorTheme(
-        host.brightness,
-        fontFamily: host.textTheme.bodyMedium?.fontFamily,
-      ),
-      child: child,
+    // Nested scopes (pushed routes, sheets) see the inspector theme as their
+    // host, so the app's own brightness is carried down separately.
+    final hostBrightness = _HostBrightness.maybeOf(context) ?? host.brightness;
+    return StreamBuilder<NetoscopeSettings>(
+      stream: netoscope.settingsChanges,
+      initialData: netoscope.settings,
+      builder: (context, _) {
+        final brightness = switch (netoscope.settings.themeMode) {
+          InspectorThemeMode.system => hostBrightness,
+          InspectorThemeMode.light => Brightness.light,
+          InspectorThemeMode.dark => Brightness.dark,
+        };
+        return _HostBrightness(
+          brightness: hostBrightness,
+          child: Theme(
+            data: inspectorTheme(
+              brightness,
+              fontFamily: host.textTheme.bodyMedium?.fontFamily,
+            ),
+            child: child,
+          ),
+        );
+      },
     );
   }
+}
+
+/// The host app's brightness, outside any inspector theme. An
+/// [InheritedTheme] so modal sheets and dialogs capture it too.
+class _HostBrightness extends InheritedTheme {
+  const _HostBrightness({required this.brightness, required super.child});
+
+  final Brightness brightness;
+
+  static Brightness? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_HostBrightness>()?.brightness;
+
+  @override
+  Widget wrap(BuildContext context, Widget child) =>
+      _HostBrightness(brightness: brightness, child: child);
+
+  @override
+  bool updateShouldNotify(_HostBrightness oldWidget) =>
+      brightness != oldWidget.brightness;
 }
 
 /// Numbers that line up in columns.
