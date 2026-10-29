@@ -35,6 +35,9 @@ class LogCapture {
       : _record = record,
         redactor = LogRedactor(
           extraKeys: config.sensitiveKeys,
+          headerKeys: config.sensitiveHeaders,
+          queryKeys: config.sensitiveQueryParameters,
+          bodyKeys: config.sensitiveBodyKeys,
           mask: config.redactionMask,
         ) {
     _bodies = BodyCapture(

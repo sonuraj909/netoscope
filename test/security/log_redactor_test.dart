@@ -153,4 +153,186 @@ void main() {
       );
     });
   });
+  group('scoped keys', () {
+    final scoped = LogRedactor(
+      headerKeys: ['X-Customer-Ref'],
+      queryKeys: ['ref'],
+      bodyKeys: ['national_id'],
+    );
+
+    test('apply only to their own scope', () {
+      expect(scoped.isSensitiveHeader('x-customer-ref'), isTrue);
+      expect(scoped.isSensitiveBodyKey('x-customer-ref'), isFalse);
+      expect(scoped.isSensitiveQueryParameter('ref'), isTrue);
+      expect(scoped.isSensitiveHeader('ref'), isFalse);
+      expect(scoped.isSensitiveBodyKey('National-ID'), isTrue);
+      expect(scoped.isSensitiveQueryParameter('national_id'), isFalse);
+    });
+
+    test('are used by the matching redaction', () {
+      expect(
+        scoped.redactHeaders({'X-Customer-Ref': 'c1', 'ref': 'r1'}),
+        {'X-Customer-Ref': '***', 'ref': 'r1'},
+      );
+      expect(
+        scoped.redactUrl(Uri.parse('https://a.dev/?ref=r1&national_id=n1')),
+        Uri.parse('https://a.dev/?ref=%2A%2A%2A&national_id=n1'),
+      );
+      expect(
+        scoped.redactValue({'national_id': 'n1', 'ref': 'r1'}),
+        {'national_id': '***', 'ref': 'r1'},
+      );
+    });
+
+    test('all apply to free text of unknown origin', () {
+      expect(
+        scoped.redactText('ref=r1&national_id=n1&x-customer-ref=c1&a=1'),
+        'ref=***&national_id=***&x-customer-ref=***&a=1',
+      );
+    });
+
+    test('key is sensitive in URLs only', () {
+      expect(redactor.isSensitiveQueryParameter('key'), isTrue);
+      expect(redactor.isSensitiveBodyKey('key'), isFalse);
+      expect(
+        redactor.redactUrl(Uri.parse('https://maps.dev/x?key=AIza1&q=a')),
+        Uri.parse('https://maps.dev/x?key=%2A%2A%2A&q=a'),
+      );
+    });
+  });
+
+  group('values under ordinary keys', () {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln';
+
+    test('embedded JSON documents are redacted by key', () {
+      expect(
+        redactor.redactValue({
+          'payload': '{"password":"pw","nested":[{"api_key":"k"}],"n":1}',
+          'plain': '{not json',
+        }),
+        {
+          'payload': '{"password":"***","nested":[{"api_key":"***"}],"n":1}',
+          'plain': '{not json',
+        },
+      );
+    });
+
+    test('unchanged embedded JSON keeps its original text', () {
+      const text = '{ "a": 1,  "b": [true] }';
+      expect(redactor.redactString(text), same(text));
+    });
+
+    test('credentials, JWTs and URL secrets are masked', () {
+      expect(
+        redactor.redactValue({
+          'note': 'use Bearer abc.def',
+          'trace': jwt,
+          'next': 'https://a.dev/cb?token=t1&page=2',
+          'repo': 'https://ghp_abc@github.com/o/r.git',
+        }),
+        {
+          'note': 'use Bearer ***',
+          'trace': '***',
+          'next': 'https://a.dev/cb?token=***&page=2',
+          'repo': 'https://***@github.com/o/r.git',
+        },
+      );
+    });
+
+    test('header values are scanned too', () {
+      expect(
+        redactor.redactHeaders({
+          'X-Upstream': 'Bearer abc',
+          'X-Trace': jwt,
+          'Location': 'https://a.dev/cb#access_token=t1&state=s',
+          'Content-Type': 'application/json; charset=utf-8',
+        }),
+        {
+          'X-Upstream': 'Bearer ***',
+          'X-Trace': '***',
+          'Location': 'https://a.dev/cb#access_token=***&state=s',
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+      );
+    });
+  });
+
+  group('redactUrl beyond query keys', () {
+    test('masks secrets in the fragment', () {
+      final url = redactor.redactUrl(
+        Uri.parse('https://app.dev/cb#access_token=t1&token_type=bearer&x=1'),
+      );
+      expect(url.fragment, 'access_token=***&token_type=***&x=1');
+    });
+
+    test('redacts JSON query values such as GraphQL variables', () {
+      final url = redactor.redactUrl(
+        Uri.https('api.dev', '/graphql', {
+          'query': 'query Q { me }',
+          'variables': '{"password":"pw","id":1}',
+        }),
+      );
+      expect(url.queryParameters['variables'], '{"password":"***","id":1}');
+      expect(url.queryParameters['query'], 'query Q { me }');
+    });
+
+    test('masks JWTs in the path', () {
+      final url = redactor.redactUrl(Uri.parse(
+        'https://api.dev/verify/eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.sig/ok',
+      ));
+      expect(url.path, '/verify/***/ok');
+    });
+  });
+
+  group('redactText edge cases', () {
+    test('masks whole objects and arrays, even when cut off', () {
+      expect(
+        redactor.redactText(
+          '{"session": {"id": "s1", "data": [1, "}"]}, "name": "Ada"}',
+        ),
+        '{"session": "***", "name": "Ada"}',
+      );
+      expect(
+        redactor.redactText('{"name": "Ada", "credentials": [{"user": "u", '),
+        '{"name": "Ada", "credentials": "***"',
+      );
+    });
+
+    test('decodes percent-encoded form keys', () {
+      expect(
+        redactor.redactText('user%5Bpassword%5D=pw&user%5Bname%5D=ada'),
+        'user%5Bpassword%5D=***&user%5Bname%5D=ada',
+      );
+    });
+
+    test('finds query secrets inside other values', () {
+      expect(
+        redactor.redactText('ClientException: x, uri=https://a.dev/?token=t1'),
+        'ClientException: x, uri=https://a.dev/?token=***',
+      );
+    });
+
+    test('masks URL user info', () {
+      expect(
+        redactor.redactText('failed: https://bob:pw@a.dev/x'),
+        'failed: https://***@a.dev/x',
+      );
+    });
+
+    test('masks key: value pairs in plain text', () {
+      expect(
+        redactor.redactText(
+          'password: hunter2\nuser: ada\nAuthorization: Bearer abc\n'
+          "token: 'q t'\ntime: 12:30",
+        ),
+        'password: ***\nuser: ada\nAuthorization: ***\n'
+        'token: ***\ntime: 12:30',
+      );
+    });
+
+    test('leaves text without secrets untouched', () {
+      const text = 'GET https://a.dev/x?page=1 failed: timeout after 3s';
+      expect(redactor.redactText(text), same(text));
+    });
+  });
 }

@@ -202,7 +202,7 @@ class GraphQLInspector {
   /// `login(password: "hunter2")`. Variable references are left alone.
   String _redactDocument(String document) =>
       document.replaceAllMapped(_inlineArgument, (m) {
-        if (!_redactor.isSensitiveKey(m.group(1)!)) return m.group(0)!;
+        if (!_redactor.isSensitiveBodyKey(m.group(1)!)) return m.group(0)!;
         return '${m.group(1)}${m.group(2)}"${_redactor.mask}"';
       });
 

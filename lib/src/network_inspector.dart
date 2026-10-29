@@ -348,7 +348,9 @@ class Netoscope {
   }
 
   /// Stops [captureDartIo] and restores the previous `HttpOverrides`.
-  /// `HttpClient`s created while capture was on keep recording.
+  /// New `HttpClient`s are no longer wrapped, even when overrides installed
+  /// later still delegate to Netoscope's. `HttpClient`s created while
+  /// capture was on keep recording.
   void stopCapturingDartIo() {
     _dartIo?.uninstall();
     _dartIo = null;

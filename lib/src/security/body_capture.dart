@@ -124,6 +124,10 @@ class BodyCapture {
   }
 
   /// Describes a multipart form without reading any file contents.
+  ///
+  /// Text fields are masked by name; other field values are redacted by
+  /// content, so JSON fields (such as a GraphQL `operations` field) are
+  /// redacted by key.
   NetworkLogBody multipart({
     required Iterable<MapEntry<String, String>> fields,
     required Iterable<MultipartFileInfo> files,
@@ -134,9 +138,9 @@ class BodyCapture {
         for (final field in fields)
           {
             'name': field.key,
-            'value': _redactor.isSensitiveKey(field.key)
+            'value': _redactor.isSensitiveBodyKey(field.key)
                 ? _redactor.mask
-                : field.value,
+                : _redactor.redactString(field.value),
           },
       ],
       'files': [for (final file in files) file.toJson()],

@@ -77,7 +77,7 @@ streams.
 | HTTP via Dio | Automatic (`netoscope.dioInterceptor`) | Includes upload/download progress when the app sets progress callbacks |
 | HTTP via `package:http` | Automatic (`netoscope.httpClient()`) | |
 | Retrofit, Chopper, GraphQL clients, `cupertino_http`, `cronet_http` | Automatic, through the Dio or `http` hook they are built on | See [Client compatibility](#client-compatibility) |
-| `dart:io` `HttpClient` | Automatic after `netoscope.captureDartIo()` | Also covers `Image.network` and SDKs; not on the web |
+| `dart:io` `HttpClient` | Automatic after `netoscope.captureDartIo()` | Opt-in; also `IOClient` and Dio's default adapter. Not on the web; see [dart:io HttpClient](#dartio-httpclient) |
 | Native Android (OkHttp) & iOS (`URLSession`) | `netoscope_native` plugin | Native code and SDKs; see [Native capture](#native-capture-android--ios) |
 | GraphQL over HTTP | Automatic, through either HTTP integration | Operations, variables, errors, partial data, batches, persisted queries, multipart uploads |
 | GraphQL over WebSocket | Automatic, with `WebSocketRecorder` | `graphql-transport-ws` and `subscriptions-transport-ws` messages |
@@ -179,7 +179,9 @@ on one of the two, so one line of setup covers them.
 | **`graphql` / `graphql_flutter`** | `HttpLink(url, httpClient: netoscope.httpClient())` | ✅ via `gql_http_link` integration test |
 | **`ferry`** | `HttpLink(url, httpClient: netoscope.httpClient())` (`gql_http_link`) | ✅ via `gql_http_link` integration test |
 | **`cupertino_http`, `cronet_http`** | `netoscope.httpClient(CupertinoClient.defaultSessionConfiguration())` | Not tested here (native) |
-| **`dart:io` `HttpClient`**, `Image.network`, SDKs | `netoscope.captureDartIo()` | ✅ tests over real sockets |
+| **`dart:io` `HttpClient`** | `netoscope.captureDartIo()` | ✅ tests over real sockets |
+| `package:http` / Dio **without** their integrations (`IOClient`, `IOHttpClientAdapter`) | `netoscope.captureDartIo()` | ✅ tests over real sockets |
+| `Image.network`, other SDKs on `HttpClient` | `netoscope.captureDartIo()` | Same mechanism, not covered by tests |
 
 ```dart
 // Retrofit
@@ -209,8 +211,8 @@ a local server.
 
 Code that uses `HttpClient` directly isn't seen by the Dio or `http` hooks.
 That includes your own code, Flutter's `Image.network` and many SDKs.
-Capture it with one call, as early as possible, for example at the start of
-`main`:
+Capture is **opt-in**. Turn it on with one call, as early as possible, for
+example at the start of `main`:
 
 ```dart
 final netoscope = Netoscope();
@@ -218,24 +220,55 @@ netoscope.captureDartIo(); // returns false on the web or when disabled
 ```
 
 How it works:
-- **Global wrapper:** it installs a `HttpOverrides` that wraps every
-  `HttpClient` created afterwards. An existing `HttpOverrides` (for example a
-  proxy or certificate setup) keeps working underneath. `stopCapturingDartIo()`
-  restores it.
+- **Global wrapper:** it installs a `HttpOverrides.global` that wraps every
+  `HttpClient` created afterwards. An `HttpOverrides` that was already
+  installed (for example a proxy or certificate setup) is never replaced: it
+  keeps creating the clients underneath. `stopCapturingDartIo()` restores it.
 - **No duplicates:** Dio's default adapter and `package:http`'s `IOClient`
   also use `HttpClient`. Calls already recorded by `dioInterceptor` or
-  `httpClient()` are skipped.
+  `httpClient()` are skipped, so combining them with capture records each
+  call once.
 - **Pass-through:** requests and responses go through unchanged. Bodies are
-  observed as the app reads them.
+  observed as the app reads them. The same redaction applies as for every
+  other integration.
 - **Media:** responses such as images are counted, not buffered.
 - **Event streams:** `text/event-stream` responses are recorded as SSE.
 
+What it covers:
+
+| Traffic | Captured | Verified |
+| --- | --- | --- |
+| `HttpClient` created after `captureDartIo()` | Yes | Tests over real sockets |
+| `package:http` default client (`http.get`, `http.Client()`, `IOClient`) on Android, iOS and desktop | Yes | Tests over real sockets |
+| Dio with its default `IOHttpClientAdapter` | Yes | Tests over real sockets |
+| `Image.network`, SDKs that create their own `HttpClient` | Should be, by the same mechanism | Not covered by tests |
+| Browser traffic on the web (`fetch`, XHR, `BrowserClient`) | **No** | Not available on the web |
+| `cupertino_http`, `cronet_http`, Dio's `NativeAdapter`, `http2_adapter` | **No**: they don't use `HttpClient` | Use `netoscope.httpClient(...)`/`dioInterceptor` instead |
+| Native code (OkHttp, `URLSession`) | **No** | Use [`netoscope_native`](#native-capture-android--ios) |
+
+Lifecycle:
+- Install it **after** any `HttpOverrides.global` your app sets, and outside
+  `HttpOverrides.runZoned`. Overrides scoped to a zone take precedence over
+  the global one, so calls made inside such zones are not captured.
+- `HttpClient`s created before `captureDartIo()` aren't wrapped. Flutter's
+  `Image.network` creates its shared client on the first image load.
+- If code assigns `HttpOverrides.global` later without delegating to the
+  previous overrides, capture stops for clients created after that.
+- After `stopCapturingDartIo()`, new clients are no longer wrapped, even when
+  another override installed later still delegates to Netoscope's.
+  `HttpClient`s created while capture was on keep recording.
+- `captureDartIo()` does nothing (returns `false`) when logging is disabled,
+  which is the default in release builds.
+- Flutter widget tests replace `HttpOverrides` with a mock, so test capture
+  with plain `test`s.
+
 Limitations:
-- `HttpClient`s created before `captureDartIo()` aren't wrapped.
-- Code that sets its own `HttpOverrides` later replaces the wrapper.
 - The duplicate check matches method and URL, so two identical calls opened
   at the same moment by different layers may be attributed to one.
-- Not available on the web. Browser `fetch`/XHR calls aren't visible to Dart.
+- Add `dioInterceptor` last. If an interceptor placed after it answers a
+  request itself (for example a cache hit with `handler.resolve`), Netoscope
+  never sees the response. Raw `HttpClient` calls to that exact method and
+  URL are then no longer recorded.
 
 ## Console-only setup
 
@@ -604,7 +637,10 @@ notification mechanism, implement `NetworkActivityNotifier` and pass it to
 | `captureHeaders` | `true` | Capture request and response headers. |
 | `excludedUrls` | `[]` | `String` (substring) or `RegExp` patterns; matching URLs are not logged. |
 | `slowRequestThreshold` | `3 s` | Exchanges at least this long are flagged as slow. |
-| `sensitiveKeys` | `{}` | Extra keys to redact, in addition to the built-in list. |
+| `sensitiveKeys` | `{}` | Extra keys to redact everywhere (headers, query parameters, bodies), in addition to the built-in list. |
+| `sensitiveHeaders` | `{}` | Extra header names to redact. |
+| `sensitiveQueryParameters` | `{}` | Extra URL query parameter names to redact. `key` is always redacted in URLs. |
+| `sensitiveBodyKeys` | `{}` | Extra keys to redact in bodies: JSON at any depth, form/multipart fields, XML/HTML, GraphQL variables and message payloads. |
 | `redactionMask` | `'***'` | Replacement for redacted values. |
 | `payloadDecoders` | `[]` | Custom `PayloadDecoder`s, such as `ProtobufPayloadDecoder`. |
 | `detectGraphQL` | `true` | Recognize GraphQL operations and errors. |
@@ -621,11 +657,17 @@ around.
 ## Redaction
 
 Redaction runs inside the adapters and recorders, **before** an entry is
-printed, stored, shown or exported. It applies to:
-- Header names, query parameter names and JSON keys at any depth.
-- GraphQL variables and literal arguments in GraphQL documents.
+stored, printed, persisted, shown in the inspector or a notification, or
+exported as JSON, HAR or cURL. Those outputs only ever see redacted entries.
+It applies to:
+- Header names, query parameter names and JSON keys at any depth, including
+  JSON nested inside string values (such as a stringified payload).
+- GraphQL variables and literal arguments in GraphQL documents, including
+  `variables` sent in the URL of GET requests.
 - XML/HTML elements and attributes.
-- Form fields, multipart fields and message payloads.
+- Form fields (including percent-encoded names such as `user%5Bpassword%5D`),
+  multipart fields (JSON fields such as GraphQL `operations` are redacted by
+  key) and message payloads.
 
 Matching ignores case, `-`, `_`, `.` and spaces.
 
@@ -635,16 +677,40 @@ A key is redacted when it:
   `privatekey` or `signature`, or
 - **equals** `otp`, `otpcode`, `pin`, `pwd`, `cvv`, `cvc`, `ssn`, `auth`,
   `jwt` or `sig`, or
-- equals one of your `sensitiveKeys`.
+- equals one of your `sensitiveKeys`, or
+- in its own context, equals one of your `sensitiveHeaders`,
+  `sensitiveQueryParameters` or `sensitiveBodyKeys`, or
+- is the query parameter `key` (API keys such as `?key=AIza…`).
 
-URL credentials (`https://user:pass@host`), `Bearer`/`Basic` credentials in
-free text and error messages, and HTML inputs whose `name` is sensitive (such
-as `<input name="csrf_token" value="…">`) are masked too.
+Values under ordinary keys, header values and error messages are also scanned
+for credentials that identify themselves:
+- `Bearer`/`Basic` credentials and JSON Web Tokens (`eyJ….eyJ….…`), also in
+  URL paths.
+- URL credentials (`https://user:pass@host`, `https://token@host`) and
+  sensitive query parameters of URLs found inside values.
+- URL fragments such as `#access_token=…`.
+- `key: value` and `key=value` pairs with a sensitive key, in plain text.
+
+HTML inputs whose `name` is sensitive (such as
+`<input name="csrf_token" value="…">`) are masked too.
+
+When a body can't be parsed, it is handled safely rather than skipped:
+
+| Body | Behavior |
+| --- | --- |
+| Invalid or truncated JSON (including bodies over 1 MiB) | Redacted by pattern; the whole value of a sensitive key is masked, even an object or array that is cut off |
+| Text, YAML-like or form bodies | Redacted by pattern (`key: value`, `key=value`, credentials) |
+| Binary, protobuf without a decoder, compressed data | Never decoded: shown as `<binary, N bytes>` |
+| Streams | Never read: `<stream not captured>` |
+| Unknown objects | `<TypeName>`; `toString()` is never called |
+| A decoder or capture that throws | Falls back to built-in handling, or `<body could not be captured>` |
 
 ```dart
 final netoscope = Netoscope(
   config: const NetworkLoggerConfig(
     sensitiveKeys: {'national_id', 'date_of_birth'},
+    sensitiveHeaders: {'X-Customer-Ref'},
+    sensitiveQueryParameters: {'code'}, // for example OAuth codes
     redactionMask: '[redacted]',
   ),
 );
@@ -655,9 +721,11 @@ final netoscope = Netoscope(
 // Logged: {"email": "ada@example.com", "password": "[redacted]", "profile": {"national_id": "[redacted]"}}
 ```
 
-Redaction is by key. A secret sent under an innocuous name, such as a GraphQL
-variable called `$p` holding a password, is not detected. Add such keys to
-`sensitiveKeys`.
+Apart from the self-identifying credentials above, redaction is by key. A
+secret sent under an innocuous name, such as a GraphQL variable called `$p`
+holding a password, is not detected. Add such keys to `sensitiveKeys` (or to
+the scoped lists). Built-in keys can't be removed: redaction errs toward
+masking too much.
 
 ## Payload inspection and decoders
 
@@ -1055,8 +1123,9 @@ streams and hand-built protocol fixtures. They never touch the network.
   - SSE over Dio needs the manual `serverSentEvents` recorder.
   - Decoded JSON without `Content-Length` has no size.
 - **`dart:io` capture** only wraps `HttpClient`s created after
-  `captureDartIo()`, and is replaced if other code installs `HttpOverrides`
-  later.
+  `captureDartIo()`, stops for new clients if other code installs
+  `HttpOverrides` later without delegating, and is not available on the web.
+  See [dart:io HttpClient](#dartio-httpclient).
 - **Recorder-based protocols** (WebSocket, native gRPC, MQTT, custom) see only
   what you route through the recorder. Netoscope does not hook sockets.
 - **GraphQL:**
@@ -1068,8 +1137,10 @@ streams and hand-built protocol fixtures. They never touch the network.
 - **History:** entries are recorded on completion (exchanges) or when they
   happen (connection events and messages). In-flight HTTP calls are not shown,
   and history is lost when the app restarts.
-- **Redaction** is key- and pattern-based. Secrets under innocuous keys or
-  inside free text may not be detected.
+- **Redaction** is key- and pattern-based. Secrets under innocuous keys, in
+  URL path segments (other than JWTs), or in binary and compressed payloads
+  may not be detected. Pattern-based redaction of free text can also mask
+  harmless text that looks like `password: …`.
 
 ## Security considerations
 

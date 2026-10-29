@@ -17,8 +17,10 @@ import '../realtime/sse_recorder.dart';
 
 /// Installed `dart:io` capture.
 abstract interface class DartIoCapture {
-  /// Restores the previous `HttpOverrides`, if this capture is still the
-  /// active one.
+  /// Stops wrapping new `HttpClient`s and restores the previous
+  /// `HttpOverrides`, if this capture is still the global one. When other
+  /// overrides were installed on top and still delegate to this one, it
+  /// stays in their chain as a pass-through.
   void uninstall();
 }
 
@@ -37,12 +39,13 @@ class _NetoscopeHttpOverrides extends HttpOverrides implements DartIoCapture {
 
   final LogCapture _capture;
   final HttpOverrides? _previous;
+  bool _installed = true;
 
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     final inner =
         _previous?.createHttpClient(context) ?? super.createHttpClient(context);
-    return _LoggingHttpClient(inner, _capture);
+    return _installed ? _LoggingHttpClient(inner, _capture) : inner;
   }
 
   @override
@@ -52,6 +55,7 @@ class _NetoscopeHttpOverrides extends HttpOverrides implements DartIoCapture {
 
   @override
   void uninstall() {
+    _installed = false;
     if (identical(HttpOverrides.current, this)) {
       HttpOverrides.global = _previous;
     }

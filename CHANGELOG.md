@@ -1,3 +1,34 @@
+## Unreleased
+
+Stronger capture-time redaction. Existing configurations keep working; more
+values are masked than before.
+
+- **Scoped deny-lists:** `NetworkLoggerConfig.sensitiveHeaders`,
+  `sensitiveQueryParameters` and `sensitiveBodyKeys` redact a name in one
+  context only. `sensitiveKeys` still applies everywhere.
+- **New redactions:**
+  - URL fragments (`#access_token=…`), the query parameter `key`, JSON query
+    values (GraphQL `variables` in GET requests) and JSON Web Tokens in URL
+    paths.
+  - JSON documents nested in string values, and multipart fields holding JSON
+    (such as GraphQL `operations`).
+  - `Bearer`/`Basic` credentials, JWTs and URL credentials in any header value
+    or string value, not just under sensitive keys.
+  - Percent-encoded form keys (`user%5Bpassword%5D=…`), `key: value` pairs in
+    plain text, and URL user info and query secrets in error messages.
+  - In unparseable or truncated JSON, the whole object or array under a
+    sensitive key is masked, instead of only its first token.
+- **`dart:io` capture:** after `stopCapturingDartIo()`, new `HttpClient`s are
+  no longer recorded even when an `HttpOverrides` installed later still
+  delegates to Netoscope's.
+- Tests: an end-to-end suite checks that secrets sent through Dio,
+  `package:http`, `dart:io` and external calls reach none of the store,
+  console, notifications, cURL, JSON/HAR exports, persisted history or the
+  inspector. New `dart:io` tests cover `package:http` and Dio without their
+  integrations.
+- README: supported `dart:io` configurations, lifecycle requirements and
+  limitations, and how unparseable bodies are handled.
+
 ## 0.2.3
 
 - `NetworkLoggerConfig.inspectorThemeMode` (`system`, `light`, `dark`):

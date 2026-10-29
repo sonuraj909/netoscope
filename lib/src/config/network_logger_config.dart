@@ -57,6 +57,9 @@ class NetworkLoggerConfig {
     this.excludedUrls = const [],
     this.slowRequestThreshold = const Duration(seconds: 3),
     this.sensitiveKeys = const {},
+    this.sensitiveHeaders = const {},
+    this.sensitiveQueryParameters = const {},
+    this.sensitiveBodyKeys = const {},
     this.redactionMask = '***',
     this.payloadDecoders = const [],
     this.detectGraphQL = true,
@@ -128,6 +131,20 @@ class NetworkLoggerConfig {
   /// Extra header, query-parameter and body keys whose values are redacted,
   /// in addition to the built-in list. Matching ignores case, `-` and `_`.
   final Set<String> sensitiveKeys;
+
+  /// Extra header names whose values are redacted. Unlike [sensitiveKeys]
+  /// they do not affect query parameters or bodies.
+  final Set<String> sensitiveHeaders;
+
+  /// Extra query parameter names whose values are redacted in URLs. `key`
+  /// is always redacted in URLs. Unlike [sensitiveKeys] they do not affect
+  /// headers or bodies (form-encoded bodies and free text excepted).
+  final Set<String> sensitiveQueryParameters;
+
+  /// Extra keys redacted in bodies: JSON at any depth, form and multipart
+  /// fields, XML/HTML, GraphQL variables and arguments, and message
+  /// payloads. Unlike [sensitiveKeys] they do not affect headers or URLs.
+  final Set<String> sensitiveBodyKeys;
 
   /// The text that replaces redacted values.
   final String redactionMask;

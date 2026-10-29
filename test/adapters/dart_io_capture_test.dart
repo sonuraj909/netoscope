@@ -8,9 +8,22 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:netoscope/netoscope.dart';
 
 const _quiet = NetworkLoggerConfig(consoleLogLevel: ConsoleLogLevel.none);
+
+/// An app-level override installed after capture, delegating to the
+/// overrides that were current when it was created.
+class _LaterOverrides extends HttpOverrides {
+  _LaterOverrides() : _previous = HttpOverrides.current;
+
+  final HttpOverrides? _previous;
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      _previous?.createHttpClient(context) ?? super.createHttpClient(context);
+}
 
 class _PreviousOverrides extends HttpOverrides {
   int created = 0;
@@ -221,5 +234,89 @@ void main() {
     final disabled =
         Netoscope(config: const NetworkLoggerConfig(enabled: false));
     expect(disabled.captureDartIo(), isFalse);
+  });
+  test('captures package:http and Dio without their integrations', () async {
+    netoscope.captureDartIo();
+
+    // The top-level functions use http.Client(), an IOClient on the VM.
+    final response = await http.get(base.replace(path: '/json'));
+    expect(response.body, '{"name":"Ada","token":"secret-1"}');
+
+    // Dio's default IOHttpClientAdapter, with no Netoscope interceptor.
+    final dio = Dio();
+    final dioResponse = await dio.post<Map<String, dynamic>>(
+      base.replace(path: '/echo').toString(),
+      data: {'user': 'ada', 'password': 'pw'},
+    );
+    expect(dioResponse.data, {'user': 'ada', 'password': 'pw'});
+    dio.close();
+
+    final logs = netoscope.logs;
+    expect(logs, hasLength(2), reason: 'each call is recorded exactly once');
+    expect(logs.first.method, 'POST');
+    expect(logs.first.requestBody!.content, '{"user":"ada","password":"***"}');
+    expect(logs.last.responseBody!.content, '{"name":"Ada","token":"***"}');
+  });
+
+  test('integrations stay single when combined with capture', () async {
+    netoscope.captureDartIo();
+    final dio = Dio()..interceptors.add(netoscope.dioInterceptor);
+    final client = netoscope.httpClient();
+
+    // Concurrent calls to the same endpoint through every path.
+    final raw = HttpClient();
+    await Future.wait([
+      dio.get<void>(base.replace(path: '/json').toString()),
+      client.get(base.replace(path: '/json')),
+      dio.post<void>(base.replace(path: '/echo').toString(), data: '{}'),
+      client.post(base.replace(path: '/echo'), body: '{}'),
+      raw
+          .getUrl(base.replace(path: '/image'))
+          .then((request) => request.close())
+          .then(read),
+    ]);
+    dio.close();
+    client.close();
+    raw.close();
+
+    expect(netoscope.logs, hasLength(5));
+  });
+
+  test('redacts URLs of raw HttpClient calls', () async {
+    netoscope.captureDartIo();
+    final client = HttpClient();
+    final url = base.replace(
+      path: '/json',
+      queryParameters: {'access_token': 'a1', 'key': 'k1', 'page': '2'},
+    );
+    await read(await (await client.getUrl(url)).close());
+    client.close();
+
+    final logged = netoscope.logs.single.url;
+    expect(logged.queryParameters, {
+      'access_token': '***',
+      'key': '***',
+      'page': '2',
+    });
+  });
+
+  test('stopping capture under a later app override passes through', () async {
+    netoscope.captureDartIo();
+    final later = _LaterOverrides();
+    HttpOverrides.global = later;
+    addTearDown(() => HttpOverrides.global = null);
+
+    final before = HttpClient();
+    await read(
+        await (await before.getUrl(base.replace(path: '/json'))).close());
+    before.close();
+    expect(netoscope.logs, hasLength(1), reason: 'the app override delegates');
+
+    netoscope.stopCapturingDartIo();
+    expect(HttpOverrides.current, same(later), reason: 'not replaced');
+    final after = HttpClient();
+    await read(await (await after.getUrl(base.replace(path: '/json'))).close());
+    after.close();
+    expect(netoscope.logs, hasLength(1), reason: 'stopped despite the chain');
   });
 }
