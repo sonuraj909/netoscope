@@ -3,7 +3,7 @@ description: >-
   Network logger and HTTP inspector for Flutter. Logs Dio, http, GraphQL,
   WebSocket, SSE and gRPC traffic with an in-app inspector, secret redaction,
   timeline and N+1 detection.
-version: 0.2.3
+version: 0.2.4
 repository: https://github.com/sonuraj909/netoscope
 issue_tracker: https://github.com/sonuraj909/netoscope/issues
 

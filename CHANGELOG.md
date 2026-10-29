@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.4
 
 Stronger capture-time redaction. Existing configurations keep working; more
 values are masked than before.
