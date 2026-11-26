@@ -26,6 +26,8 @@ New inspector features. Existing integrations keep working unchanged.
   inspector.
 - README: the limitation about history being lost on restart now points to
   persistent stores.
+- Screenshots of in-flight calls, the Send again / Compare actions and the
+  comparison screen, for the README and pub.dev.
 
 ## 0.2.4
 

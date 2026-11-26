@@ -40,3 +40,9 @@ screenshots:
     path: screenshots/timeline.webp
   - description: Traffic statistics with status breakdown and N+1 findings.
     path: screenshots/statistics.webp
+  - description: Calls still in flight, with a live elapsed time.
+    path: screenshots/in_flight.webp
+  - description: Sending a call again or comparing it with another call.
+    path: screenshots/request_actions.webp
+  - description: Differences between two calls to the same endpoint.
+    path: screenshots/compare.webp

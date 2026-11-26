@@ -14,6 +14,9 @@ in-memory store, and an optional in-app inspector lets you browse it.
   <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/json_tree.webp" width="160" alt="JSON tree viewer">
   <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/timeline.webp" width="160" alt="Timeline">
   <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/statistics.webp" width="160" alt="Statistics">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/in_flight.webp" width="160" alt="Calls in flight">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/request_actions.webp" width="160" alt="Send again and compare actions">
+  <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/compare.webp" width="160" alt="Comparing two calls">
 </p>
 
 > **Netoscope is a debugging aid, not a production observability tool.**
@@ -1168,8 +1171,14 @@ It demonstrates:
 
 ### Screenshots
 
-_Screenshots of the inspector will be added before the first stable
-release._
+| Calls in flight | Send again & compare | Comparing calls |
+| --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/in_flight.webp" width="220" alt="Calls in flight"> | <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/request_actions.webp" width="220" alt="Send again and compare actions"> | <img src="https://raw.githubusercontent.com/sonuraj909/netoscope/main/screenshots/compare.webp" width="220" alt="Comparing two calls"> |
+
+The screenshots of the new features are rendered by
+`tool/screenshots/screenshots_test.dart` (run it with
+`flutter test tool/screenshots/screenshots_test.dart`, then
+`tool/screenshots/encode.sh`), using real fonts and demo data.
 
 ## Testing
 

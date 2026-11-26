@@ -32,3 +32,6 @@ migrate_working_dir/
 
 # Companion packages are published separately.
 packages/
+
+# Screenshot generator (development only).
+tool/screenshots/
