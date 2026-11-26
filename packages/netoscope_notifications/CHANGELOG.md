@@ -1,3 +1,8 @@
+## 0.1.1
+
+- Requires `flutter_local_notifications` 23 (Flutter 3.44+, Dart 3.12+). No
+  API changes.
+
 ## 0.1.0
 
 - Notification design:

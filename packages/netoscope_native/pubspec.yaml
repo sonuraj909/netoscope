@@ -2,7 +2,7 @@ name: netoscope_native
 description: >-
   Native network capture for Netoscope: records HTTP calls made by Android
   (OkHttp) and iOS (URLSession) code into the same redacted history.
-version: 0.1.0
+version: 0.1.1
 # Path dependency on netoscope until it is published; switch to a hosted
 # version constraint before publishing this package.
 publish_to: none

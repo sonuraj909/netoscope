@@ -1,4 +1,4 @@
-## Unreleased
+## 0.1.1
 
 - iOS: Swift Package Manager support. The plugin ships a `Package.swift`
   alongside its podspec, so it builds with SPM-enabled Flutter projects

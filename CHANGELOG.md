@@ -1,4 +1,4 @@
-## Unreleased
+## 0.3.0
 
 New inspector features. Existing integrations keep working unchanged.
 

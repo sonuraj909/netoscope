@@ -2,7 +2,7 @@ name: netoscope_notifications
 description: >-
   Local-notification support for Netoscope: shows recent network activity in
   a quiet notification that opens the inspector when tapped.
-version: 0.1.0
+version: 0.1.1
 # Path dependency on netoscope until it is published; switch to a hosted
 # version constraint before publishing this package.
 publish_to: none
