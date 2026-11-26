@@ -21,6 +21,7 @@ import 'core/contracts/network_log_sink.dart';
 import 'core/contracts/network_log_store.dart';
 import 'core/entities/network_event_kind.dart';
 import 'core/entities/network_log_entry.dart';
+import 'core/entities/pending_network_call.dart';
 import 'core/entities/protocol_details.dart';
 import 'core/entities/traffic_insights.dart';
 import 'core/entities/traffic_statistics.dart';
@@ -245,8 +246,45 @@ class Netoscope {
   /// Emits the full history, newest first, whenever it changes.
   Stream<List<NetworkLogEntry>> get logChanges => _getLogs.watch();
 
-  /// Removes all recorded calls.
-  void clearLogs() => _clearLogs();
+  /// Removes all recorded calls. Calls still in flight are kept in
+  /// [pendingCalls] and recorded when they finish.
+  void clearLogs() {
+    _capture.clearReplays();
+    _clearLogs();
+  }
+
+  /// Whether [entry] can be sent again with [replay].
+  ///
+  /// Needs [NetworkLoggerConfig.enableReplay]. Supported for calls made
+  /// through [attachDio], [dioInterceptor] and buffered `package:http`
+  /// requests from [httpClient], while they are among the last
+  /// [NetworkLoggerConfig.maxHistorySize] calls.
+  bool canReplay(NetworkLogEntry entry) =>
+      isEnabled && _capture.canReplay(entry.id);
+
+  /// Sends the original request of [entry] again, with its original
+  /// (unredacted) headers and body.
+  ///
+  /// The new call is recorded like any other and tagged `replay`. The
+  /// returned future completes when the replayed call has finished,
+  /// successfully or not. Throws a [StateError] when [canReplay] is `false`.
+  Future<void> replay(NetworkLogEntry entry) {
+    if (!canReplay(entry)) {
+      throw StateError('This call cannot be replayed.');
+    }
+    return tagged('replay', () => _capture.replay(entry.id));
+  }
+
+  /// HTTP calls that have started but not finished yet, newest first.
+  ///
+  /// Tracked by [dioInterceptor], [httpClient] and [captureDartIo]. When a
+  /// call finishes it leaves this list and is recorded in [logs] with the
+  /// same id. URLs are redacted like history entries.
+  List<PendingNetworkCall> get pendingCalls => _capture.pendingCalls;
+
+  /// Emits [pendingCalls] whenever a call starts or finishes.
+  Stream<List<PendingNetworkCall>> get pendingChanges =>
+      _capture.pendingChanges;
 
   /// Duplicate and N+1 requests in the current history, detected with
   /// [NetworkLoggerConfig.trafficAnalyzer].
@@ -276,6 +314,19 @@ class Netoscope {
   /// When logging is disabled this is a pass-through interceptor.
   late final Interceptor dioInterceptor =
       isEnabled ? DioNetworkLogger(_capture) : Interceptor();
+
+  /// Adds a recording interceptor to [dio] and returns [dio].
+  ///
+  /// Like adding [dioInterceptor], but replays (see [replay]) are sent
+  /// through [dio] itself, with its adapter and all of its interceptors.
+  /// Use one or the other for a given `Dio`, not both. Call it after adding
+  /// the app's own interceptors, so the final headers are recorded.
+  Dio attachDio(Dio dio) {
+    dio.interceptors.add(
+      isEnabled ? DioNetworkLogger(_capture, replayClient: dio) : Interceptor(),
+    );
+    return dio;
+  }
 
   /// Returns a `package:http` client recording into this logger.
   ///
@@ -463,6 +514,7 @@ class Netoscope {
     await _historySubscription?.cancel();
     _notifications?.dispose();
     await _settingsChanges.close();
+    await _capture.dispose();
     await _ownedStore?.dispose();
   }
 }

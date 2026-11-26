@@ -78,6 +78,13 @@ class _LoggingHttpClient implements HttpClient {
       return open();
     }
     final call = _Call(_capture.nextId(), method, url, _capture.currentTags());
+    _capture.begin(
+      call.id,
+      method,
+      url,
+      tags: call.tags,
+      startedAt: call.startedAt,
+    );
     return open().then<HttpClientRequest>(
       (request) => _LoggingRequest(request, _capture, call),
       onError: (Object error, StackTrace stackTrace) {
@@ -426,6 +433,8 @@ HttpClientResponse _wrapResponse(
   _Call call,
 ) {
   if (_isEventStream(response)) {
+    // An event stream is recorded as a connection from here on.
+    capture.end(call.id);
     final events = SseRecorder(
       capture,
       url: call.url,
@@ -559,6 +568,7 @@ void _record(
   int? responseSize,
 }) {
   final duration = call.stopwatch.elapsed;
+  capture.end(call.id);
   capture.record(() {
     final requestType = call.requestHeaders[HttpHeaders.contentTypeHeader];
     final responseHeaders = response == null

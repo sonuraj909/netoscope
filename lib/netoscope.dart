@@ -50,12 +50,19 @@ export 'src/core/entities/traffic_insights.dart'
 export 'src/core/entities/traffic_statistics.dart'
     show EndpointStatistics, TrafficStatistics;
 export 'src/core/usecases/analyze_traffic.dart' show TrafficAnalyzer;
+export 'src/core/usecases/compare_network_logs.dart'
+    show
+        NetworkLogComparison,
+        NetworkLogDiffChange,
+        NetworkLogFieldDiff,
+        NetworkLogLineDiff;
 export 'src/core/entities/webhook_details.dart'
     show WebhookDetails, WebhookOutcome, WebhookSource;
 export 'src/core/entities/network_log_entry.dart'
     show NetworkLogEntry, NetworkLogOutcome;
 export 'src/core/entities/network_log_error.dart'
     show NetworkErrorType, NetworkLogError;
+export 'src/core/entities/pending_network_call.dart' show PendingNetworkCall;
 export 'src/data/sinks/console_network_log_sink.dart'
     show ConsoleNetworkLogSink;
 export 'src/data/storage/file_network_log_persistence.dart'

@@ -1,6 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;

@@ -319,4 +319,18 @@ void main() {
     after.close();
     expect(netoscope.logs, hasLength(1), reason: 'stopped despite the chain');
   });
+
+  test('tracks HttpClient calls in flight until the response is read',
+      () async {
+    netoscope.captureDartIo();
+    final client = HttpClient();
+    final request = await client.getUrl(base.replace(path: '/json'));
+    final pending = netoscope.pendingCalls.single;
+    expect(pending.url.path, '/json');
+
+    await read(await request.close());
+    client.close();
+    expect(netoscope.pendingCalls, isEmpty);
+    expect(netoscope.logs.single.id, pending.id);
+  });
 }

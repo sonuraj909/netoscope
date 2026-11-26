@@ -35,9 +35,19 @@ Iterable<String> _requestTags(RequestOptions options) {
 /// streams or modified.
 class DioNetworkLogger extends Interceptor {
   /// Creates an interceptor recording through [capture].
-  DioNetworkLogger(this._capture);
+  ///
+  /// When replay is enabled, recorded calls are replayed through
+  /// [replayClient], or through a plain `Dio` with this interceptor when it
+  /// is omitted.
+  DioNetworkLogger(this._capture, {Dio? replayClient})
+      : _replayClient = replayClient;
 
   final LogCapture _capture;
+  final Dio? _replayClient;
+  Dio? _fallbackClient;
+
+  Dio get _replayDio =>
+      _replayClient ?? (_fallbackClient ??= Dio()..interceptors.add(this));
 
   /// Per-request timing, keyed weakly by the request so nothing is retained
   /// once Dio is done with it.
@@ -54,6 +64,15 @@ class DioNetworkLogger extends Interceptor {
       timing.tags = _capture.currentTags(_requestTags(options));
       _timings[options] = timing;
       _capture.claim(timing.method, timing.uri);
+      if (options.extra[netoscopeSkipKey] != true) {
+        _capture.begin(
+          timing.id,
+          timing.method,
+          timing.uri,
+          tags: timing.tags,
+          startedAt: timing.startedAt,
+        );
+      }
       if (_capture.config.captureTransferProgress) {
         _observeProgress(options, timing);
       }
@@ -115,7 +134,11 @@ class DioNetworkLogger extends Interceptor {
   ) {
     final timing = _timings[options];
     _timings[options] = null;
-    if (timing != null) _capture.release(timing.method, timing.uri);
+    if (timing != null) {
+      _capture
+        ..release(timing.method, timing.uri)
+        ..end(timing.id);
+    }
     _capture.record(() {
       if (options.extra[netoscopeSkipKey] == true) return null;
       final uri = options.uri;
@@ -143,7 +166,7 @@ class DioNetworkLogger extends Interceptor {
         error: error,
         webhookAttempt: hint is WebhookAttempt ? hint : null,
       );
-      return NetworkLogEntry(
+      final entry = NetworkLogEntry(
         id: timing?.id ?? _capture.nextId(),
         method: options.method,
         url: _capture.url(uri),
@@ -189,7 +212,44 @@ class DioNetworkLogger extends Interceptor {
         responseSize: response == null ? null : _responseSize(response),
         error: inspection.error,
       );
+      if (_capture.config.enableReplay) _registerReplay(entry.id, options);
+      return entry;
     });
+  }
+
+  /// Keeps a copy of [options] so the call can be sent again unchanged.
+  /// Requests whose body cannot be sent twice (streams, files that cannot be
+  /// cloned) are not replayable.
+  void _registerReplay(String id, RequestOptions options) {
+    final data = options.data;
+    if (data is Stream) return;
+    final RequestOptions snapshot;
+    try {
+      snapshot = _copy(options);
+    } catch (_) {
+      return;
+    }
+    _capture.registerReplay(id, () async {
+      try {
+        await _replayDio.fetch<Object?>(_copy(snapshot));
+      } on DioException {
+        // The replayed call, including its failure, is in the history.
+      }
+    });
+  }
+
+  /// A fresh copy of [options]: a cloned body, no cancel token and no
+  /// progress callbacks, so the app's own handlers are not invoked again.
+  static RequestOptions _copy(RequestOptions options) {
+    final data = options.data;
+    return options.copyWith(
+      data: data is FormData ? data.clone() : data,
+      headers: Map.of(options.headers),
+      extra: Map.of(options.extra),
+    )
+      ..cancelToken = null
+      ..onSendProgress = null
+      ..onReceiveProgress = null;
   }
 
   static Map<String, String> _requestHeaders(Map<String, dynamic> headers) => {

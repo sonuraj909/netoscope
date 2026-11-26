@@ -1,5 +1,8 @@
 import 'dart:math' as math;
 
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import '../../core/entities/network_event_kind.dart';

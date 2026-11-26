@@ -1,6 +1,7 @@
 import '../core/entities/network_event_kind.dart';
 import '../core/entities/network_log_entry.dart';
 import '../core/entities/payload_format.dart';
+import '../core/entities/pending_network_call.dart';
 import '../core/entities/protocol_details.dart';
 import '../core/entities/traffic_insights.dart';
 import 'search_query.dart';
@@ -292,6 +293,37 @@ class NetworkLogFilter {
           insights: insights,
         ))
           entry,
+    ];
+  }
+
+  /// The in-flight [calls] to show alongside the entries.
+  ///
+  /// A pending call has no response yet, so it is hidden by every filter that
+  /// needs one (status, slow, payload, GraphQL, insights, …). The search
+  /// query, method, tag and HTTP protocol filters apply; each search term
+  /// must appear in the call's method or URL.
+  List<PendingNetworkCall> applyPending(Iterable<PendingNetworkCall> calls) {
+    final needsResponse = status != StatusFilter.all ||
+        onlySlow ||
+        (protocols.isNotEmpty && !protocols.contains(NetworkProtocol.http)) ||
+        direction != null ||
+        sseEventType != null ||
+        payloadFormat != null ||
+        onlyGraphQL ||
+        onlyGraphQLErrors ||
+        connectionId != null ||
+        ids != null ||
+        onlyDuplicates ||
+        onlyNPlusOne;
+    if (needsResponse) return const [];
+    final terms = query.toLowerCase().split(RegExp(r'\s+'))
+      ..removeWhere((term) => term.isEmpty);
+    return [
+      for (final call in calls)
+        if ((method == null || call.method == method) &&
+            (tag == null || call.tags.contains(tag)) &&
+            terms.every('${call.method} ${call.url}'.toLowerCase().contains))
+          call,
     ];
   }
 

@@ -67,6 +67,7 @@ class NetworkLoggerConfig {
     this.captureTransferProgress = true,
     this.captureRealtimeMessages = true,
     this.trafficAnalyzer = const TrafficAnalyzer(),
+    this.enableReplay = false,
   })  : assert(maxHistorySize > 0, 'maxHistorySize must be positive'),
         assert(maxBodySize >= 0, 'maxBodySize must not be negative');
 
@@ -171,6 +172,19 @@ class NetworkLoggerConfig {
 
   /// How duplicate and N+1 requests are detected.
   final TrafficAnalyzer trafficAnalyzer;
+
+  /// Whether recorded HTTP calls can be sent again from the inspector or
+  /// with `Netoscope.replay`.
+  ///
+  /// Off by default. Replaying needs the original request, so when this is
+  /// on Netoscope keeps an unredacted copy of each replayable request
+  /// (headers and body, including credentials) in memory, for at most
+  /// [maxHistorySize] calls. Those copies are never printed, displayed,
+  /// exported or persisted, and are dropped when the history is cleared.
+  /// Supported for Dio (`Netoscope.attachDio` or `Netoscope.dioInterceptor`)
+  /// and `package:http` `Request`s; streamed and multipart `package:http`
+  /// requests and `dart:io` calls cannot be replayed.
+  final bool enableReplay;
 
   /// Whether logging is active for the current build mode.
   bool get isEnabled =>

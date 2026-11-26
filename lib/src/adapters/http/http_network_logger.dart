@@ -70,6 +70,13 @@ class HttpNetworkLogger extends http.BaseClient {
                   null),
     );
 
+    _capture.begin(
+      call.id,
+      request.method,
+      request.url,
+      tags: call.tags,
+      startedAt: call.startedAt,
+    );
     final http.StreamedResponse response;
     // Claim the call while the inner client opens it, so dart:io capture
     // (if enabled) does not record it a second time.
@@ -101,6 +108,8 @@ class HttpNetworkLogger extends http.BaseClient {
     http.StreamedResponse response,
     _PendingCall call,
   ) {
+    // An event stream is recorded as a connection from here on.
+    _capture.end(call.id);
     final events = SseRecorder(
       _capture,
       url: call.request.url,
@@ -178,6 +187,7 @@ class HttpNetworkLogger extends http.BaseClient {
     int? responseSize,
   }) {
     final duration = call.stopwatch.elapsed;
+    _capture.end(call.id);
     _capture.record(() {
       final request = call.request;
       final responseType = response?.headers['content-type'];
@@ -193,7 +203,7 @@ class HttpNetworkLogger extends http.BaseClient {
         responsePayload: responseComplete ? responseBytes : null,
         error: error == null ? null : _error(error),
       );
-      return NetworkLogEntry(
+      final entry = NetworkLogEntry(
         id: call.id,
         method: request.method,
         url: _capture.url(request.url),
@@ -224,6 +234,33 @@ class HttpNetworkLogger extends http.BaseClient {
         responseSize: responseSize,
         error: inspection.error,
       );
+      if (_capture.config.enableReplay && request is http.Request) {
+        _registerReplay(entry.id, request);
+      }
+      return entry;
+    });
+  }
+
+  /// Keeps a copy of [request] so the call can be sent again through this
+  /// client. Only buffered [http.Request]s can be copied.
+  void _registerReplay(String id, http.Request request) {
+    final method = request.method;
+    final url = request.url;
+    final headers = Map.of(request.headers);
+    final body = Uint8List.fromList(request.bodyBytes);
+    final followRedirects = request.followRedirects;
+    final maxRedirects = request.maxRedirects;
+    final persistentConnection = request.persistentConnection;
+    _capture.registerReplay(id, () async {
+      final copy = http.Request(method, url)
+        ..headers.addAll(headers)
+        ..bodyBytes = body
+        ..followRedirects = followRedirects
+        ..maxRedirects = maxRedirects
+        ..persistentConnection = persistentConnection;
+      final response = await send(copy);
+      // Reading the body completes the recording of the replayed call.
+      await response.stream.drain<void>();
     });
   }
 

@@ -52,6 +52,9 @@ attach.
 `attach` registers `NetoscopeURLProtocol`, which captures `URLSession.shared`
 and `NSURLConnection`.
 
+The plugin supports both Swift Package Manager and CocoaPods; Flutter picks
+whichever your app uses. From Swift, `import netoscope_native` in either case.
+
 Sessions with their own configuration need one of two things:
 - `captureAllUrlSessions: true`. It adds the protocol to every
   `URLSessionConfiguration.default` and `.ephemeral` created afterwards, by

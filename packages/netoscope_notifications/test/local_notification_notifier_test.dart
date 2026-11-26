@@ -1,4 +1,7 @@
 import 'package:flutter/foundation.dart';
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import '../config/network_logger_config.dart';
 import '../core/contracts/payload_decoder.dart';
@@ -6,6 +7,7 @@ import '../core/entities/network_event_kind.dart';
 import '../core/entities/network_log_body.dart';
 import '../core/entities/network_log_entry.dart';
 import '../core/entities/network_log_error.dart';
+import '../core/entities/pending_network_call.dart';
 import '../core/entities/protocol_details.dart';
 import '../core/usecases/record_network_log.dart';
 import '../protocols/graphql/graphql_inspector.dart';
@@ -74,6 +76,101 @@ class LogCapture {
 
   final Map<String, int> _claims = {};
   final Set<String> _globalTags = {};
+
+  /// The most calls tracked as in flight. Calls that are abandoned without
+  /// completing (for example a `dart:io` request that is never closed) are
+  /// evicted oldest first.
+  static const int maxPendingCalls = 200;
+
+  final LinkedHashMap<String, PendingNetworkCall> _pending = LinkedHashMap();
+  final StreamController<List<PendingNetworkCall>> _pendingChanges =
+      StreamController.broadcast();
+  List<PendingNetworkCall>? _pendingSnapshot;
+
+  /// Calls that have started but not finished, newest first.
+  List<PendingNetworkCall> get pendingCalls =>
+      _pendingSnapshot ??= List.unmodifiable(_pending.values.toList().reversed);
+
+  /// Emits [pendingCalls] whenever a call starts or finishes.
+  Stream<List<PendingNetworkCall>> get pendingChanges => _pendingChanges.stream;
+
+  /// Tracks the call [id] as in flight until [end] is called with the same
+  /// [id]. Ignored when [url] would not be recorded. Never throws.
+  void begin(
+    String id,
+    String method,
+    Uri url, {
+    List<String> tags = const [],
+    DateTime? startedAt,
+  }) {
+    if (!shouldLog(url) || _pendingChanges.isClosed) return;
+    try {
+      _pending[id] = PendingNetworkCall(
+        id: id,
+        method: method,
+        url: redactor.redactUrl(url),
+        startedAt: startedAt ?? DateTime.now(),
+        tags: tags,
+      );
+      while (_pending.length > maxPendingCalls) {
+        _pending.remove(_pending.keys.first);
+      }
+      _notifyPending();
+    } catch (_) {
+      // Tracking must never break the app's networking.
+    }
+  }
+
+  /// Stops tracking the call [id] as in flight. Safe to call more than once.
+  void end(String id) {
+    if (_pending.remove(id) != null) _notifyPending();
+  }
+
+  void _notifyPending() {
+    _pendingSnapshot = null;
+    if (!_pendingChanges.isClosed) _pendingChanges.add(pendingCalls);
+  }
+
+  // Original (unredacted) requests, kept only when replay is enabled.
+  final LinkedHashMap<String, Future<void> Function()> _replays =
+      LinkedHashMap();
+
+  /// Makes the call [id] replayable with [send], which must send an
+  /// identical copy of the original request. Ignored unless
+  /// [NetworkLoggerConfig.enableReplay] is on. At most
+  /// [NetworkLoggerConfig.maxHistorySize] calls are kept, oldest evicted.
+  void registerReplay(String id, Future<void> Function() send) {
+    if (!config.enableReplay || _pendingChanges.isClosed) return;
+    _replays[id] = send;
+    while (_replays.length > config.maxHistorySize) {
+      _replays.remove(_replays.keys.first);
+    }
+  }
+
+  /// Whether the call [id] can be replayed.
+  bool canReplay(String id) => _replays.containsKey(id);
+
+  /// Sends the call [id] again. The new call is recorded like any other.
+  ///
+  /// Throws a [StateError] when [id] cannot be replayed.
+  Future<void> replay(String id) {
+    final send = _replays[id];
+    if (send == null) {
+      throw StateError('The call $id cannot be replayed.');
+    }
+    return send();
+  }
+
+  /// Forgets every replayable request.
+  void clearReplays() => _replays.clear();
+
+  /// Releases the pending-call stream and the replayable requests.
+  Future<void> dispose() {
+    _replays.clear();
+    _pending.clear();
+    _pendingSnapshot = null;
+    return _pendingChanges.close();
+  }
 
   /// Tags applied to every call until removed.
   Set<String> get globalTags => Set.unmodifiable(_globalTags);

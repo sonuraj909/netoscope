@@ -49,7 +49,7 @@ passwords, tokens and cookies redacted. Using `package:http` instead? Use
 - [Console-only setup](#console-only-setup)
 - [Inspector](#inspector)
 - [Deep inspection](#deep-inspection): search syntax, tags, duplicates & N+1,
-  statistics, timeline
+  statistics, timeline, in-flight calls, replaying and comparing calls
 - [History persistence & export](#history-persistence--export)
 - [Native capture (Android & iOS)](#native-capture-android--ios)
 - [Runtime switches](#runtime-switches)
@@ -334,6 +334,22 @@ MaterialApp(
 );
 ```
 
+To open the inspector by shaking the device instead, use the companion
+package [`netoscope_shake`](packages/netoscope_shake). It is separate because
+it depends on the `sensors_plus` plugin:
+
+```dart
+builder: (context, child) => NetoscopeShakeDetector(
+  netoscope: netoscope,
+  navigatorKey: navigatorKey,
+  child: child!,
+),
+```
+
+It listens only while the inspector is available, never opens a second
+inspector, and does nothing where there is no accelerometer. On the iOS
+Simulator use **Device ▸ Shake**.
+
 The inspector follows your app's theme brightness. Switch it to light or dark
 from the inspector's settings (the gear icon), or set the initial mode, for
 example a dark inspector in a light-only app:
@@ -366,6 +382,10 @@ The inspector provides:
     Handshake tab for connections.
   - A GraphQL tab listing operations, variables and errors with their paths.
   - **View connection events**, which lists every event of a connection.
+  - **⋮ → Send again** and **⋮ → Compare with…**; see
+    [Replaying a call](#replaying-a-call) and
+    [Comparing calls](#comparing-calls).
+- **In-flight calls** at the top of the list, with a live elapsed time.
 - **Copy and export:**
   - Copy one call as **cURL** or JSON, from its detail screen or by
     long-pressing its row.
@@ -503,6 +523,63 @@ The **Timeline** screen is a Gantt view of the calls in the current filter:
 - **Controls:** zoom with the buttons or a pinch, use **Fit** to see
   everything, and tap a row to open the call.
 
+### In-flight calls
+
+Calls that have been sent but have not finished appear at the top of the
+list with a spinner and a live elapsed time, and turn into a normal row when
+they complete. This makes hanging requests and slow backends visible while
+they happen. The summary line counts them (`2 in flight`).
+
+- Tracked for Dio, `package:http` and `dart:io` capture.
+- Free-text search, method and tag filters apply to them. Filters that need
+  a response (status, slow, payload, GraphQL, duplicates…) hide them.
+- From code: `netoscope.pendingCalls` and `netoscope.pendingChanges`. URLs
+  are redacted like history entries.
+
+### Replaying a call
+
+**⋮ → Send again** on a call's detail screen sends the original request once
+more, and the new call appears in the history tagged `#replay`. Requests
+other than `GET`, `HEAD` and `OPTIONS` ask for confirmation first, because
+sending them again can repeat side effects.
+
+Replay is **off by default**. Turn it on in debug builds:
+
+```dart
+final netoscope = Netoscope(
+  config: const NetworkLoggerConfig(enableReplay: true),
+);
+final dio = netoscope.attachDio(Dio()); // replays go through this Dio
+```
+
+- **Original values are sent.** The history is redacted, so to replay a call
+  Netoscope keeps an unredacted copy of the request (headers and body,
+  including credentials) in memory, for the last `maxHistorySize` calls only.
+  The copies are never printed, shown, exported or persisted, and are
+  dropped by **Clear history**.
+- **Dio:** with `netoscope.attachDio(dio)`, replays go through that `Dio`,
+  with its adapter and all of its interceptors (such as token refresh). With
+  the shared `netoscope.dioInterceptor`, they go through a plain `Dio`. The
+  request still carries the final headers, but not a custom adapter. Cancel
+  tokens and progress callbacks are not reused.
+- **`package:http`:** `Request`s (the usual `get`/`post`/… calls) are
+  replayed through the same client. `StreamedRequest`s and
+  `MultipartRequest`s cannot be replayed, and neither can `dart:io` calls.
+- From code: `netoscope.canReplay(entry)` and `await netoscope.replay(entry)`.
+
+### Comparing calls
+
+**⋮ → Compare with…** on a call's detail screen lists the other calls, with
+calls to the same endpoint first, and shows what differs:
+- status, duration, sizes and error;
+- query parameters, and request and response headers, by name;
+- request and response bodies as a line diff, with JSON pretty-printed.
+
+Unchanged values are folded away; the filter button shows them, and the
+swap button flips the two calls. Entries are already redacted, so masked
+values compare as equal. The same comparison is available from code as
+`NetworkLogComparison(older, newer)`.
+
 ## History persistence & export
 
 History is in memory by default. To keep it across restarts, use a
@@ -553,7 +630,8 @@ await NetoscopeNative.attach(netoscope, captureAllUrlSessions: true);
   `.default`/`.ephemeral` configurations.
 
 Verified by an integration test on the Android emulator and the iOS
-simulator. See the plugin README for limitations.
+simulator. On iOS the plugin works with both Swift Package Manager and
+CocoaPods. See the plugin README for limitations.
 Other native sources can be recorded with `netoscope.recordExternalCall(…)`.
 
 ## Runtime switches
@@ -647,6 +725,7 @@ notification mechanism, implement `NetworkActivityNotifier` and pass it to
 | `webhooks` | `WebhookConfig()` | Which requests are webhook deliveries, and the header names to read. |
 | `captureTransferProgress` | `true` | Record Dio upload/download progress for requests that report it. |
 | `captureRealtimeMessages` | `true` | Record individual WebSocket/SSE/MQTT/gRPC-stream messages. Lifecycle events are always recorded. |
+| `enableReplay` | `false` | Allow calls to be sent again. Keeps an unredacted copy of recent requests in memory; see [Replaying a call](#replaying-a-call). |
 
 Worst-case memory is roughly `maxHistorySize × 2 bodies × maxBodySize`
 characters, about 13 MB with the defaults. Busy real-time connections evict
@@ -1135,8 +1214,9 @@ streams and hand-built protocol fixtures. They never touch the network.
 - **gRPC:** native gRPC over plain HTTP clients is not supported (no trailer
   access), and compressed and `grpc-web-text` messages are not decoded.
 - **History:** entries are recorded on completion (exchanges) or when they
-  happen (connection events and messages). In-flight HTTP calls are not shown,
-  and history is lost when the app restarts.
+  happen (connection events and messages). In-flight HTTP calls are listed
+  separately until they finish. History is lost when the app restarts unless
+  you use a [persistent store](#history-persistence--export).
 - **Redaction** is key- and pattern-based. Secrets under innocuous keys, in
   URL path segments (other than JWTs), or in binary and compressed payloads
   may not be detected. Pattern-based redaction of free text can also mask
@@ -1151,6 +1231,9 @@ streams and hand-built protocol fixtures. They never touch the network.
 - Netoscope sends nothing anywhere. Entries go only to the in-memory store,
   the console and any sinks you add.
 - Webhook signature values and signing keys are never recorded.
+- With `enableReplay: true`, unredacted copies of recent requests are kept in
+  memory so they can be sent again. They never leave the app's memory except
+  when a replay sends them to their original server.
 - Netoscope is not a substitute for production observability, audit logging
   or data-protection controls.
 

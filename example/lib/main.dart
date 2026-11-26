@@ -3,12 +3,16 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:netoscope/netoscope.dart';
 import 'package:netoscope_native/netoscope_native.dart';
 import 'package:netoscope_notifications/netoscope_notifications.dart';
+import 'package:netoscope_shake/netoscope_shake.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -28,7 +32,11 @@ Future<void> main() async {
     );
   }
   runApp(
-    NetoscopeExampleApp(store: store, localServer: await startLocalServer()),
+    NetoscopeExampleApp(
+      store: store,
+      localServer: await startLocalServer(),
+      shakeToOpen: true,
+    ),
   );
 }
 
@@ -50,13 +58,22 @@ Future<void> _shareExport(NetoscopeExport export) async {
 }
 
 class NetoscopeExampleApp extends StatefulWidget {
-  const NetoscopeExampleApp({super.key, this.store, this.localServer});
+  const NetoscopeExampleApp({
+    super.key,
+    this.store,
+    this.localServer,
+    this.shakeToOpen = false,
+  });
 
   /// A persistent history store, or `null` for in-memory history.
   final NetworkLogStore? store;
 
   /// The loopback server for native and dart:io demos (not on the web).
   final Uri? localServer;
+
+  /// Whether shaking the device opens the inspector (off in widget tests,
+  /// which have no sensor plugin).
+  final bool shakeToOpen;
 
   @override
   State<NetoscopeExampleApp> createState() => _NetoscopeExampleAppState();
@@ -82,13 +99,18 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
       sensitiveKeys: {'email'},
       excludedUrls: ['/health'],
       webhooks: WebhookConfig(endpoints: ['/hooks/'], maxAttempts: 3),
+      // Lets the inspector send a call again (⋮ → Send again). Keeps
+      // unredacted copies of recent requests in memory, so debug builds only.
+      enableReplay: true,
     ),
   );
 
-  // 2. Attach it to Dio (add it last so it sees final headers)…
-  late final Dio _dio = Dio(BaseOptions(baseUrl: 'https://demo.netoscope.dev'))
-    ..httpClientAdapter = DemoBackendAdapter()
-    ..interceptors.add(_netoscope.dioInterceptor);
+  // 2. Attach it to Dio (after the app's own interceptors, so it sees the
+  //    final headers). Replays are sent through this Dio…
+  late final Dio _dio = _netoscope.attachDio(
+    Dio(BaseOptions(baseUrl: 'https://demo.netoscope.dev'))
+      ..httpClientAdapter = DemoBackendAdapter(),
+  );
 
   // 3. …and/or wrap a package:http client.
   late final http.Client _http = _netoscope.httpClient(demoHttpClient());
@@ -136,11 +158,17 @@ class _NetoscopeExampleAppState extends State<NetoscopeExampleApp> {
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
       themeMode: _themeMode,
-      // 4. Optional: a floating button that opens the inspector everywhere.
-      builder: (context, child) => NetworkInspectorOverlay(
+      // 4. Optional: a floating button that opens the inspector everywhere,
+      //    and shake-to-open (package:netoscope_shake).
+      builder: (context, child) => NetoscopeShakeDetector(
         netoscope: _netoscope,
         navigatorKey: _navigatorKey,
-        child: child!,
+        enabled: widget.shakeToOpen,
+        child: NetworkInspectorOverlay(
+          netoscope: _netoscope,
+          navigatorKey: _navigatorKey,
+          child: child!,
+        ),
       ),
       home: DemoScreen(
         netoscope: _netoscope,

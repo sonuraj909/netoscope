@@ -1,5 +1,8 @@
 // Renders every inspector screen at phone, tablet and desktop sizes, with
 // large accessibility text, and fails on any overflow or layout error.
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:netoscope/netoscope.dart';

@@ -1,3 +1,32 @@
+## Unreleased
+
+New inspector features. Existing integrations keep working unchanged.
+
+- **In-flight calls:** calls that have not finished are listed at the top of
+  the inspector with a live elapsed time, and the summary counts them. Tracked
+  for Dio, `package:http` and `dart:io` capture. New
+  `Netoscope.pendingCalls` and `pendingChanges`, and the `PendingNetworkCall`
+  entity. URLs are redacted.
+- **Replay** (opt-in, `NetworkLoggerConfig.enableReplay`): **⋮ → Send again**
+  on the detail screen, or `Netoscope.replay(entry)`, sends the original
+  request again. The new call is tagged `replay`. Requests other than
+  `GET`/`HEAD`/`OPTIONS` ask for confirmation. Unredacted copies of the last
+  `maxHistorySize` requests are kept in memory only, and are dropped by
+  `clearLogs`.
+- **`Netoscope.attachDio(dio)`:** adds the interceptor and sends replays
+  through that `Dio`, including its interceptors and adapter.
+- **Compare calls:** **⋮ → Compare with…** diffs two calls (status, timing,
+  sizes, query parameters, headers, and bodies line by line with JSON
+  pretty-printed). Calls to the same endpoint are offered first. Available
+  from code as `NetworkLogComparison`.
+- Analysis is clean on Flutter 3.47+, where `package:flutter/material.dart`
+  is deprecated. The package keeps supporting Flutter 3.24+.
+- `netoscope_native` supports Swift Package Manager on iOS.
+- New companion package `netoscope_shake`: shake the device to open the
+  inspector.
+- README: the limitation about history being lost on restart now points to
+  persistent stores.
+
 ## 0.2.4
 
 Stronger capture-time redaction. Existing configurations keep working; more

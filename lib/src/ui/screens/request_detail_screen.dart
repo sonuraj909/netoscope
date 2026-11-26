@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import '../../core/entities/graphql_details.dart';
@@ -32,7 +35,15 @@ class RequestDetailScreen extends StatelessWidget {
     this.redactionMask = '***',
     this.insights,
     this.onShowCalls,
+    this.onReplay,
+    this.onCompare,
   });
+
+  /// Sends this call again, when it can be replayed.
+  final Future<void> Function()? onReplay;
+
+  /// Opens a picker to compare this call with another one.
+  final VoidCallback? onCompare;
 
   /// Duplicate and N+1 findings, to explain this call's part in them.
   final TrafficInsights? insights;
@@ -121,6 +132,56 @@ class RequestDetailScreen extends StatelessWidget {
     ];
   }
 
+  static const Set<String> _safeMethods = {'GET', 'HEAD', 'OPTIONS'};
+
+  /// Sends the call again. Requests that may change server state ask first.
+  Future<void> _replay(BuildContext context) async {
+    final replay = onReplay;
+    if (replay == null) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (!_safeMethods.contains(entry.method)) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Send this ${entry.method} again?'),
+          content: const Text(
+            'The original request, with its real headers and body, is sent '
+            'to the server again. This can repeat side effects such as '
+            'creating records or payments.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Send again'),
+            ),
+          ],
+        ),
+      );
+      if (!(confirmed ?? false)) return;
+    }
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('Sending again…')),
+    );
+    try {
+      await replay();
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Sent again. The new call is in the history.'),
+          ),
+        );
+    } catch (error) {
+      messenger
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('Could not send: $error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabs = _tabs();
@@ -156,6 +217,27 @@ class RequestDetailScreen extends StatelessWidget {
                 icon: const Icon(Icons.copy),
                 onPressed: () => copyEntryAsJson(context, entry),
               ),
+              if (onReplay != null || onCompare != null)
+                PopupMenuButton<_DetailAction>(
+                  tooltip: 'More actions',
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (action) => switch (action) {
+                    _DetailAction.replay => _replay(context),
+                    _DetailAction.compare => onCompare?.call(),
+                  },
+                  itemBuilder: (_) => [
+                    if (onReplay != null)
+                      const PopupMenuItem(
+                        value: _DetailAction.replay,
+                        child: _MenuRow(Icons.replay, 'Send again'),
+                      ),
+                    if (onCompare != null)
+                      const PopupMenuItem(
+                        value: _DetailAction.compare,
+                        child: _MenuRow(Icons.compare_arrows, 'Compare with…'),
+                      ),
+                  ],
+                ),
             ],
             bottom: TabBar(
               isScrollable: tabs.length > 3,
@@ -179,6 +261,24 @@ class RequestDetailScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+enum _DetailAction { replay, compare }
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow(this.icon, this.label);
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 12),
+          Flexible(child: Text(label)),
+        ],
+      );
 }
 
 class _OverviewTab extends StatelessWidget {

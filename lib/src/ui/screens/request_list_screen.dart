@@ -1,10 +1,14 @@
 import 'dart:async';
 
+// material.dart is deprecated from Flutter 3.47 (use package:material_ui);
+// kept until the minimum supported Flutter version reaches 3.47.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/entities/network_event_kind.dart';
 import '../../core/entities/network_log_entry.dart';
+import '../../core/entities/pending_network_call.dart';
 import '../../core/entities/traffic_insights.dart';
 import '../../network_inspector.dart';
 import '../network_log_filter.dart';
@@ -15,6 +19,7 @@ import '../widgets/filter_sheet.dart';
 import '../widgets/search_help_sheet.dart';
 import '../widgets/settings_sheet.dart';
 import '../widgets/log_formatting.dart';
+import 'compare_screen.dart';
 import 'request_detail_screen.dart';
 import 'statistics_screen.dart';
 import 'timeline_screen.dart';
@@ -51,6 +56,10 @@ class _RequestListScreenState extends State<RequestListScreen> {
   late List<NetworkLogEntry> _entries;
   StreamSubscription<List<NetworkLogEntry>>? _subscription;
   StreamSubscription<Object?>? _settingsSubscription;
+  StreamSubscription<List<PendingNetworkCall>>? _pendingSubscription;
+  List<PendingNetworkCall> _pending = const [];
+  // Refreshes the elapsed time of in-flight calls while there are any.
+  Timer? _ticker;
   late NetworkLogFilter _filter = widget.initialFilter;
   TrafficInsights _insights = TrafficInsights.empty;
 
@@ -73,6 +82,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.netoscope != widget.netoscope) {
       unawaited(_subscription?.cancel());
+      unawaited(_pendingSubscription?.cancel());
       _listen();
     }
   }
@@ -86,12 +96,30 @@ class _RequestListScreenState extends State<RequestListScreen> {
     _subscription = widget.netoscope.logChanges.listen((entries) {
       if (mounted) setState(() => _setEntries(entries));
     });
+    _setPending(widget.netoscope.pendingCalls);
+    _pendingSubscription = widget.netoscope.pendingChanges.listen((calls) {
+      if (mounted) setState(() => _setPending(calls));
+    });
+  }
+
+  void _setPending(List<PendingNetworkCall> calls) {
+    _pending = calls;
+    if (calls.isEmpty) {
+      _ticker?.cancel();
+      _ticker = null;
+    } else {
+      _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   @override
   void dispose() {
     unawaited(_subscription?.cancel());
     unawaited(_settingsSubscription?.cancel());
+    unawaited(_pendingSubscription?.cancel());
+    _ticker?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -162,10 +190,57 @@ class _RequestListScreenState extends State<RequestListScreen> {
               redactionMask: widget.netoscope.config.redactionMask,
               insights: _insights,
               onShowCalls: _showCalls,
+              onReplay: widget.netoscope.canReplay(entry)
+                  ? () => widget.netoscope.replay(entry)
+                  : null,
+              onCompare: _comparable(entry).isEmpty
+                  ? null
+                  : () => _pickComparison(entry),
             ),
           ),
         ),
       );
+
+  /// Other HTTP calls [entry] can be compared with: calls to the same
+  /// endpoint first, newest first within each group.
+  List<NetworkLogEntry> _comparable(NetworkLogEntry entry) {
+    if (entry.kind != NetworkEventKind.exchange) return const [];
+    bool sameEndpoint(NetworkLogEntry e) =>
+        e.method == entry.method &&
+        e.url.host == entry.url.host &&
+        e.url.path == entry.url.path;
+    final others = [
+      for (final e in _entries)
+        if (e.id != entry.id && e.kind == NetworkEventKind.exchange) e,
+    ];
+    return [
+      ...others.where(sameEndpoint),
+      ...others.where((e) => !sameEndpoint(e)),
+    ];
+  }
+
+  Future<void> _pickComparison(NetworkLogEntry entry) async {
+    final candidates = _comparable(entry);
+    final navigator = Navigator.of(context);
+    final picked = await showModalBottomSheet<NetworkLogEntry>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => _ComparePicker(
+        entry: entry,
+        candidates: candidates,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => InspectorThemeScope(
+          netoscope: widget.netoscope,
+          child: CompareScreen(first: entry, second: picked),
+        ),
+      ),
+    );
+  }
 
   void _showCalls(String title, NetworkLogFilter filter) =>
       Navigator.of(context).push(
@@ -266,7 +341,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
         NetworkLogFilter(connectionId: connectionId),
       );
 
-  String _summary(List<NetworkLogEntry> visible) {
+  String _summary(List<NetworkLogEntry> visible, int inFlight) {
     final failed = visible
         .where(
           (e) => e.outcome != NetworkLogOutcome.success || e.hasGraphQLErrors,
@@ -278,6 +353,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
         : '${visible.length} of ${_entries.length} events';
     return [
       count,
+      if (inFlight > 0) '$inFlight in flight',
       if (failed > 0) '$failed with errors',
       if (slow > 0) '$slow slow',
     ].join('  ·  ');
@@ -292,6 +368,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
       slowThreshold: _slowThreshold,
       insights: _insights,
     );
+    final pending = _filter.applyPending(_pending);
     final canShare = widget.netoscope.exportHandler != null;
     // On narrow phones, or with large text, Timeline and Statistics move into
     // the overflow menu so the title stays readable.
@@ -313,7 +390,7 @@ class _RequestListScreenState extends State<RequestListScreen> {
                   ?.copyWith(fontWeight: FontWeight.w700),
             ),
             Text(
-              _summary(visible),
+              _summary(visible, pending.length),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: scheme.onSurfaceVariant,
                 fontFeatures: tabularFigures,
@@ -445,14 +522,17 @@ class _RequestListScreenState extends State<RequestListScreen> {
           ),
           const Divider(),
           Expanded(
-            child: visible.isEmpty
+            child: visible.isEmpty && pending.isEmpty
                 ? _EmptyState(hasEntries: _entries.isNotEmpty)
                 : ListView.separated(
                     padding: const EdgeInsets.only(bottom: 96),
-                    itemCount: visible.length,
+                    itemCount: pending.length + visible.length,
                     separatorBuilder: (_, __) => const Divider(indent: 36),
                     itemBuilder: (context, index) {
-                      final entry = visible[index];
+                      if (index < pending.length) {
+                        return _PendingRow(call: pending[index]);
+                      }
+                      final entry = visible[index - pending.length];
                       return _RequestRow(
                         entry: entry,
                         slowThreshold: _slowThreshold,
@@ -791,6 +871,208 @@ class _RequestRow extends StatelessWidget {
                           fontWeight: slow ? FontWeight.w700 : null,
                         ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Picks the call to compare with.
+class _ComparePicker extends StatelessWidget {
+  const _ComparePicker({required this.entry, required this.candidates});
+
+  final NetworkLogEntry entry;
+  final List<NetworkLogEntry> candidates;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final sameCount = candidates
+        .takeWhile(
+          (e) =>
+              e.method == entry.method &&
+              e.url.host == entry.url.host &&
+              e.url.path == entry.url.path,
+        )
+        .length;
+    Widget header(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+          child: Text(
+            text.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+            ),
+          ),
+        );
+    Widget tile(NetworkLogEntry e) => ListTile(
+          dense: true,
+          title: Text(
+            '${e.method} ${entryTitle(e)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: codeTextStyle.copyWith(fontSize: 12.5),
+          ),
+          subtitle: Text(
+            [e.url.host, formatTime(e.timestamp)].join(' · '),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontFeatures: tabularFigures,
+            ),
+          ),
+          trailing: Text(
+            entryStatus(e),
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: outcomeColor(e, scheme),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          onTap: () => Navigator.of(context).pop(e),
+        );
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      minChildSize: 0.3,
+      maxChildSize: 0.95,
+      builder: (context, controller) => ListView(
+        controller: controller,
+        padding: const EdgeInsets.only(bottom: 24),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+            child: Text(
+              'Compare with…',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          if (sameCount > 0) ...[
+            header('Same endpoint'),
+            for (final e in candidates.take(sameCount)) tile(e),
+          ],
+          if (candidates.length > sameCount) ...[
+            header('Other calls'),
+            for (final e in candidates.skip(sameCount)) tile(e),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A call that has been sent but has not finished yet.
+class _PendingRow extends StatelessWidget {
+  const _PendingRow({required this.call});
+
+  final PendingNetworkCall call;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final muted = scheme.onSurfaceVariant;
+    final small = theme.textTheme.bodySmall?.copyWith(
+      color: muted,
+      fontFeatures: tabularFigures,
+    );
+    final path = call.url.path.isEmpty ? '/' : call.url.path;
+    return Semantics(
+      label: '${call.method} $path, in flight',
+      child: Padding(
+        key: ValueKey('pending-${call.id}'),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: SizedBox.square(
+                  dimension: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.6,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth * 0.3,
+                          ),
+                          child: Text(
+                            call.method,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.fade,
+                            style: codeTextStyle.copyWith(
+                              fontSize: 12,
+                              height: 1.2,
+                              fontWeight: FontWeight.w700,
+                              color: methodColor(context, call.method),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            path,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      [
+                        call.url.host,
+                        formatTime(call.startedAt),
+                        for (final tag in call.tags) '#$tag',
+                      ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: small,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: constraints.maxWidth * 0.4),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.topEnd,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Pending',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(formatDuration(call.elapsed), style: small),
                     ],
                   ),
                 ),
